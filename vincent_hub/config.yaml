@@ -1,0 +1,10 @@
+name: Vincent Hub
+version: "0.0.1"
+slug: vincent_hub
+description: Placeholder for the Vincent hub service (install test only)
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: application
+boot: auto
