@@ -13,7 +13,7 @@
  *   POST /api/pin                    {pin, newPin} change the admin PIN
  *   POST /api/unlock | /api/lock     {pin} opens settings on this device for ten minutes
  *   POST /api/devices/:id/add|rooms  {rooms, newRooms} choose it / say which rooms it is in (several allowed)
- *   POST /api/home                   {name, theme, newRooms, zip, timeZone, contact} the home's name, look, first rooms, where it is, how to reach the owner
+ *   POST /api/home                   {name, theme, style, character, voice, newRooms, zip, timeZone, contact} the home's name, look, first rooms, where it is, how to reach the owner
  *   POST /api/rooms, /api/rooms/:id/rename|delete|photo      rooms and their photos (photo = a JPEG body)
  *   GET  /api/rooms/:id/photo
  *   GET  /api/media/:id/sources      a player's favourites, playlists and inputs
@@ -47,7 +47,7 @@ import { Lists } from "./lists.ts";
 import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
 import { store } from "./store.ts";
-import { THEMES, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
+import { THEMES, STYLES, CHARACTERS, VOICE_LANGUAGES, defaultVoice, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
@@ -209,7 +209,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
-      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, unlocked: isUnlocked(key),
+      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => [c.id, store.voices[c.id] ?? defaultVoice(c.id)])), unlocked: isUnlocked(key),
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
@@ -311,6 +311,13 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req);
     if (typeof b.name === "string" && b.name.trim()) store.setHomeName(b.name);
     if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) store.setTheme(b.theme);
+    if (typeof b.style === "string" && STYLES.some((t) => t.id === b.style)) store.setStyle(b.style);
+    if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character)) store.setCharacter(b.character);
+    if (b.voice && typeof b.voice === "object") {
+      const who = CHARACTERS.find((c) => c.id === b.voice.character);
+      const locale = String(b.voice.locale ?? ""), voice = String(b.voice.voice ?? "");
+      if (who && VOICE_LANGUAGES.some((l) => l.accents.some((a) => a.id === locale)) && (who.voices as readonly string[]).includes(voice)) store.setVoice(who.id, { locale, voice });
+    }
     roomIds(b); // rooms named during home setup
     if (typeof b.contact === "string" && b.contact.trim()) store.setContact(b.contact);
     // The ZIP code last: it is the one part that can be refused, and the rest should stand either way.
@@ -344,7 +351,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
 }
 
 const dist = fileURLToPath(new URL("../../app/dist", import.meta.url));
-const TYPES: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".woff2": "font/woff2", ".json": "application/json" };
+const TYPES: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".woff2": "font/woff2", ".json": "application/json", ".mp3": "audio/mpeg" };
 
 async function page(res: ServerResponse, path: string): Promise<void> {
   if (!existsSync(dist)) { res.writeHead(404); res.end("The app has not been built (npm run build)."); return; }

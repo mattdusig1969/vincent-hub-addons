@@ -231,3 +231,32 @@ export interface AddResult {
   needs?: Needs;
   message?: string;
 }
+
+
+/** A style changes shapes and lettering (fonts, corners, borders); a colour palette changes only colours. Any style goes with any palette. */
+export const STYLES = [
+  { id: "traditional", name: "Traditional", note: "Serif headings, soft corners" },
+  { id: "modern", name: "Modern", note: "Clean sans, crisp corners" },
+  { id: "contemporary", name: "Contemporary", note: "Rounded, no outlines" },
+] as const;
+
+/** The home's concierge. Each has five voices per accent; the names are the voice maker's. */
+export const CHARACTERS = [
+  { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", voices: ["Enceladus", "Charon", "Fenrir", "Orus", "Puck"], locale: "en-GB" },
+  { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", voices: ["Leda", "Kore", "Aoede", "Zephyr", "Sulafat"], locale: "en-US" },
+] as const;
+
+export const VOICE_LANGUAGES = [
+  { id: "en", name: "English", accents: [{ id: "en-GB", name: "British" }, { id: "en-US", name: "American" }, { id: "en-AU", name: "Australian" }, { id: "en-IN", name: "Indian" }] },
+  { id: "es", name: "Español", accents: [{ id: "es-ES", name: "España" }, { id: "es-US", name: "Latinoamérica" }] },
+  { id: "fr", name: "Français", accents: [{ id: "fr-FR", name: "France" }, { id: "fr-CA", name: "Canada" }] },
+  { id: "de", name: "Deutsch", accents: [{ id: "de-DE", name: "Deutschland" }] },
+  { id: "it", name: "Italiano", accents: [{ id: "it-IT", name: "Italia" }] },
+] as const;
+
+export interface VoiceChoice { locale: string; voice: string }
+/** What a character sounds like when the home has not chosen. */
+export function defaultVoice(character: string): VoiceChoice {
+  const c = CHARACTERS.find((x) => x.id === character) ?? CHARACTERS[0];
+  return { locale: c.locale, voice: c.voices[0] };
+}

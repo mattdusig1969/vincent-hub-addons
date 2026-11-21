@@ -30,6 +30,10 @@ interface Saved {
   /** For a device that was waiting for a yes: the rooms chosen for whatever it brings. */
   entryRooms?: Record<string, string[]>;
   theme?: string;
+  style?: string;
+  character?: string;
+  /** character id -> the voice the home chose for it */
+  voices?: Record<string, { locale: string; voice: string }>;
   homeName?: string;
   /** Where the home is, from the ZIP code given at setup. */
   place?: SavedPlace;
@@ -141,6 +145,12 @@ export const store = {
   setHomeName(name: string): void { saved.homeName = name.trim().slice(0, 40); save(); },
   get theme(): string { return saved.theme ?? "ivory"; },
   setTheme(theme: string): void { saved.theme = theme; save(); },
+  get style(): string { return saved.style ?? "traditional"; },
+  setStyle(style: string): void { saved.style = style; save(); },
+  get character(): string { return saved.character ?? "vincent"; },
+  setCharacter(c: string): void { saved.character = c; save(); },
+  get voices(): Record<string, { locale: string; voice: string }> { return saved.voices ?? {}; },
+  setVoice(character: string, v: { locale: string; voice: string }): void { saved.voices = { ...saved.voices, [character]: v }; save(); },
   get place(): SavedPlace | undefined { return saved.place; },
   setPlace(p: SavedPlace): void { saved.place = { ...saved.place, ...p }; save(); },
   get contact(): string { return saved.contact ?? ""; },
