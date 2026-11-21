@@ -116,3 +116,6 @@ createServer((req, res) => {
     if (!res.headersSent) json(res, 400, { error: e.message });
   });
 }).listen(PORT, () => console.log(`[hub] Vincent hub service on :${PORT}`));
+
+// On the hub this process is stopped with a plain signal; leave at once.
+for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => process.exit(0));
