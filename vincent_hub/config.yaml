@@ -1,5 +1,5 @@
 name: Vincent Hub
-version: "0.2.1"
+version: "0.3.0"
 slug: vincent_hub
 description: The Vincent hub service. Holds the home's device list and serves the Vincent app.
 arch:
@@ -9,6 +9,8 @@ init: false
 startup: application
 boot: auto
 homeassistant_api: true
+hassio_api: true
+hassio_role: manager
 ports:
   8870/tcp: 8870
 ports_description:

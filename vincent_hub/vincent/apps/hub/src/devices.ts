@@ -40,7 +40,7 @@ const DISCOVERED = new Set(["zeroconf", "ssdp", "dhcp", "homekit", "bluetooth", 
 interface Snapshot {
   devices: Device[];
   /** control id -> entity id + the device that owns it */
-  controls: Map<string, { entityId: string; deviceId: string; domain: string }>;
+  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string }>;
   /** device id -> waiting flow */
   flows: Map<string, { flowId: string; handler: string }>;
 }
@@ -67,7 +67,7 @@ export class Devices {
       d.rooms = store.roomsOf(d.id, entryIds);
       d.controls = d.controls.map((c) => {
         const ref = this.snap!.controls.get(c.id)!;
-        return project(c.id, c.name, ref.domain, this.ha.states.get(ref.entityId));
+        return project(c.id, c.name, ref.domain, this.ha.states.get(ref.entityId), ref.integration);
       });
     }
     return this.snap;
@@ -92,6 +92,7 @@ export class Devices {
 
     for (const d of devs) {
       if (d.entry_type === "service" || d.disabled_by) continue;
+      const integration = (d.config_entries as string[]).map((id) => entryDomain.get(id)).find(Boolean) ?? "";
       const mine = ents.filter((e: any) => e.device_id === d.id && !e.disabled_by && !e.hidden_by && !e.entity_category);
       const controls: Control[] = [];
       let best: { category: Category; rank: number } | undefined;
@@ -101,11 +102,12 @@ export class Devices {
         if (!k) continue;
         if (!best || k.rank < best.rank) best = k;
         const name = e.name || e.original_name || d.name_by_user || d.name || "";
-        snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain });
-        controls.push(project(e.id, name, domain, undefined));
+        // The device's own address (a Sonos speaker answers there), never pinned: Home Assistant keeps it current.
+        const host = typeof d.configuration_url === "string" ? /\/\/([^:/]+)/.exec(d.configuration_url)?.[1] : undefined;
+        snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host });
+        controls.push(project(e.id, name, domain, undefined, integration));
       }
       if (!controls.length) continue; // nothing the app could do with it
-      const integration = (d.config_entries as string[]).map((id) => entryDomain.get(id)).find(Boolean) ?? "";
       const entryIds = d.config_entries as string[];
       this.entriesOf.set(d.id, entryIds);
       snap.devices.push({
@@ -193,6 +195,8 @@ export class Devices {
       case "brightness": await call("turn_on", { brightness_pct: clamp(v, 1, 100) }); break;
       case "play": await call("media_play"); break;
       case "pause": await call("media_pause"); break;
+      case "next": await call("media_next_track"); break;
+      case "previous": await call("media_previous_track"); break;
       case "volume": await call("volume_set", { volume_level: clamp(v, 0, 100) / 100 }); break;
       case "target": await call("set_temperature", { temperature: v }); break;
       case "lock": await call("lock"); break;
@@ -203,6 +207,16 @@ export class Devices {
     }
   }
 
+  /** A media player the household added: what the hub needs to browse it and play on it. */
+  async player(controlId: string): Promise<{ entityId: string; integration: string; host?: string }> {
+    const snap = await this.snapshot();
+    const ref = snap.controls.get(controlId);
+    const dev = ref && snap.devices.find((d) => d.id === ref.deviceId);
+    if (!ref || !dev || ref.domain !== "media_player") throw new Error("unknown player");
+    if (dev.status !== "added") throw new Error("that device has not been added to Vincent");
+    return ref;
+  }
+
   /** Does this entity belong to a device the app shows? Decides whether a change is worth a push. */
   shown(entityId: string): boolean {
     if (!this.snap) return false;
@@ -211,7 +225,7 @@ export class Devices {
   }
 }
 
-function project(id: string, name: string, domain: string, s: HaState | undefined): Control {
+function project(id: string, name: string, domain: string, s: HaState | undefined, integration: string): Control {
   const a = s?.attributes ?? {};
   const base = { id, name, available: !!s && s.state !== "unavailable" && s.state !== "unknown" };
   switch (KIND[domain].kind) {
@@ -221,7 +235,15 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
     }
     case "media": {
       const st = s?.state === "playing" ? "playing" : s?.state === "paused" ? "paused" : s?.state === "off" ? "off" : "idle";
-      return { ...base, kind: "media", state: st, title: a.media_title, artist: a.media_artist, volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined };
+      const sonos = integration === "sonos";
+      // A Sonos lists its favourites as inputs too; those are shown as favourites, so only the real inputs stay here.
+      const inputs = (Array.isArray(a.source_list) ? (a.source_list as string[]) : []).filter((x) => !sonos || /^(tv|line-in)$/i.test(x));
+      return {
+        ...base, kind: "media", state: st, title: a.media_title, artist: a.media_artist, album: a.media_album_name,
+        volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined,
+        art: a.entity_picture ? `/api/art/${id}?v=${hash(String(a.entity_picture))}` : undefined,
+        source: typeof a.source === "string" ? a.source : undefined, inputs, library: sonos ? "sonos" : "none",
+      };
     }
     case "climate": return { ...base, kind: "climate", current: a.current_temperature, target: a.temperature, mode: s?.state ?? "off" };
     case "lock": return { ...base, kind: "lock", locked: s?.state === "locked" };
@@ -231,5 +253,6 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
   }
 }
 
+const hash = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const clamp = (v: number | undefined, lo: number, hi: number) => Math.max(lo, Math.min(hi, Number(v ?? lo)));
 const titled = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());

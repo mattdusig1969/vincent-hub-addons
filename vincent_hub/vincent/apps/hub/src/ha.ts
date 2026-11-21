@@ -127,6 +127,21 @@ export class HA {
     return this.call({ type: "call_service", domain, service, target: { entity_id: entityId }, service_data: data });
   }
 
+  /** A picture Home Assistant holds (cover art). `path` is the address it gave in a state, relative or absolute. */
+  async picture(path: string): Promise<{ type: string; data: Buffer }> {
+    const url = /^https?:/.test(path) ? path : this.t.rest.replace(/\/api$/, "") + path;
+    const mine = !/^https?:/.test(path);
+    const r = await fetch(url, { headers: mine ? { Authorization: `Bearer ${await this.t.token()}` } : {}, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`no picture (${r.status})`);
+    return { type: r.headers.get("content-type") ?? "image/jpeg", data: Buffer.from(await r.arrayBuffer()) };
+  }
+
+  /** Is this integration set up on the hub? */
+  async has(domain: string): Promise<boolean> {
+    const entries = (await this.call({ type: "config_entries/get" })) as { domain: string }[];
+    return entries.some((e) => e.domain === domain);
+  }
+
   async rest(method: string, path: string, body?: unknown): Promise<any> {
     const r = await fetch(this.t.rest + path, {
       method,

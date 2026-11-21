@@ -15,6 +15,11 @@
  *   POST /api/home                   {name, theme, newRooms} the home's name, look and first rooms
  *   POST /api/rooms, /api/rooms/:id/rename|delete|photo      rooms and their photos (photo = a JPEG body)
  *   GET  /api/rooms/:id/photo
+ *   GET  /api/media/:id/sources      a player's favourites, playlists and inputs
+ *   POST /api/media/:id/play         {kind, id} play one of them
+ *   GET  /api/radio?q=|tag=          internet radio stations
+ *   GET  /api/art/:id                cover art of what a player is playing
+ *   GET  /api/software               the hub software's version; POST /api/software/update brings the newest
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
  *
  * Serves the built app too, when apps/app/dist exists.
@@ -26,12 +31,30 @@ import { fileURLToPath } from "node:url";
 import { extname, join, normalize } from "node:path";
 import { HA } from "./ha.ts";
 import { Devices } from "./devices.ts";
+import { Media, radio } from "./media.ts";
 import { store } from "./store.ts";
-import { THEMES, type HubStatus, type SetupRequest } from "../../../packages/core/src/index.ts";
+import { THEMES, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
 const devices = new Devices(ha);
+const media = new Media(ha, devices);
+
+/** On the hub, Vincent runs as an add-on and can ask the hub's supervisor about its own software. */
+async function supervisor(method: string, path: string, timeout = 20_000): Promise<any> {
+  const token = process.env.SUPERVISOR_TOKEN;
+  if (!token) throw new Error("not on a hub");
+  const r = await fetch(`http://supervisor${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeout) });
+  const j = (await r.json().catch(() => ({}))) as any;
+  if (!r.ok || j.result === "error") throw new Error(j.message ?? `the hub answered ${r.status}`);
+  return j.data ?? {};
+}
+async function software(): Promise<Software> {
+  try {
+    const info = await supervisor("GET", "/addons/self/info");
+    return { version: info.version ?? "", latest: info.version_latest ?? info.version ?? "", canUpdate: !!info.update_available };
+  } catch { return { version: "", latest: "", canUpdate: false }; }
+}
 
 // Push: one debounced "changed" to every open app.
 const streams = new Set<ServerResponse>();
@@ -136,6 +159,22 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, { devices: await devices.all(), rooms: store.rooms(), theme: store.theme, unlocked: isUnlocked(key) });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
+  const med = /^\/api\/media\/([^/]+)\/(sources|play)$/.exec(path);
+  if (med && m === "GET" && med[2] === "sources") return json(res, 200, await media.sources(med[1]));
+  if (med && m === "POST" && med[2] === "play") { await media.play(med[1], await body(req)); return json(res, 200, { ok: true }); }
+  if (m === "GET" && path === "/api/radio") {
+    const q = new URL(req.url ?? "/", "http://hub").searchParams;
+    return json(res, 200, { stations: await radio((q.get("q") ?? "").trim().slice(0, 60), (q.get("tag") ?? "").trim().slice(0, 40)) });
+  }
+  const art = /^\/api\/art\/([^/]+)$/.exec(path);
+  if (m === "GET" && art) {
+    const pic = await media.art(art[1]).catch(() => null);
+    if (!pic) return json(res, 404, { error: "no picture" });
+    res.writeHead(200, { ...CORS, "Content-Type": pic.type, "Cache-Control": "private, max-age=86400" });
+    res.end(pic.data);
+    return;
+  }
+  if (m === "GET" && path === "/api/software") return json(res, 200, await software());
   const photo = /^\/api\/rooms\/([a-f0-9]+)\/photo$/.exec(path);
   if (m === "GET" && photo) {
     const file = store.photoFile(photo[1]);
@@ -155,6 +194,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     ...(Array.isArray(b.newRooms) ? b.newRooms.map(String).filter((n: string) => n.trim()).map((n: string) => store.room(n)) : []),
   ];
 
+  if (path === "/api/software/update") {
+    await supervisor("POST", "/store/reload", 60_000).catch(() => {});
+    const info = await supervisor("GET", "/addons/self/info");
+    if (!info.update_available) return json(res, 200, { ok: false, message: "Your hub already has the newest Vincent." });
+    json(res, 200, { ok: true, message: "Updating. Vincent will be back in a minute or two." });
+    // The update stops this service and starts the new one; nothing after this line is certain to run.
+    supervisor("POST", `/store/addons/${info.slug}/update`, 600_000).catch((e: Error) => console.log(`[hub] update failed: ${e.message}`));
+    return;
+  }
   if (path === "/api/reviewed") { store.setReviewed(); return done(); }
   if (path === "/api/home") {
     const b = await body(req);

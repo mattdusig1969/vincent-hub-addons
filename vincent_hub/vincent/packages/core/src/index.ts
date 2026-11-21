@@ -57,7 +57,15 @@ interface ControlBase {
 export type Control =
   | (ControlBase & { kind: "light"; on: boolean; dimmable: boolean; brightness: number })
   | (ControlBase & { kind: "switch"; on: boolean })
-  | (ControlBase & { kind: "media"; state: "playing" | "paused" | "idle" | "off"; title?: string; artist?: string; volume?: number })
+  | (ControlBase & {
+      kind: "media"; state: "playing" | "paused" | "idle" | "off"; title?: string; artist?: string; album?: string; volume?: number;
+      /** Address of the cover art on the hub; changes when the art does. */
+      art?: string;
+      /** The input in use ("TV", "Line-in") and the ones it can switch to. */
+      source?: string; inputs: string[];
+      /** "sonos" = the hub can list this speaker's favourites and playlists. */
+      library: "sonos" | "none";
+    })
   | (ControlBase & { kind: "climate"; current?: number; target?: number; mode: string })
   | (ControlBase & { kind: "lock"; locked: boolean })
   | (ControlBase & { kind: "cover"; open: boolean })
@@ -65,12 +73,33 @@ export type Control =
 
 export type Action =
   | "on" | "off" | "brightness"
-  | "play" | "pause" | "volume"
+  | "play" | "pause" | "volume" | "next" | "previous"
   | "target"
   | "lock" | "unlock"
   | "open" | "close";
 
 export interface ControlRequest { id: string; action: Action; value?: number }
+
+/** Something a speaker can be asked to play. */
+export interface MediaItem {
+  kind: "favourite" | "playlist" | "radio" | "input";
+  id: string;
+  title: string;
+  subtitle?: string;
+  art?: string;
+}
+
+/** What a speaker offers. Favourites come grouped by the service they belong to ("Spotify", "SiriusXM"). */
+export interface MediaSources {
+  favourites: { service: string; items: MediaItem[] }[];
+  playlists: MediaItem[];
+  inputs: MediaItem[];
+  /** False when internet radio is not available on this hub. */
+  radio: boolean;
+}
+
+/** The hub's own software. */
+export interface Software { version: string; latest: string; canUpdate: boolean }
 
 export interface Room {
   id: string;
