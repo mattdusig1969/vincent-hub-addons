@@ -18,6 +18,7 @@
  *   GET  /api/media/:id/sources      a player's favourites, playlists and inputs
  *   POST /api/media/:id/play         {kind, id} play one of them
  *   GET  /api/radio?q=|tag=          internet radio stations
+ *   GET  /api/thumb/:token           the picture of something to play (only ones the hub listed)
  *   GET  /api/art/:id                cover art of what a player is playing
  *   GET  /api/software               the hub software's version; POST /api/software/update brings the newest
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
@@ -31,7 +32,7 @@ import { fileURLToPath } from "node:url";
 import { extname, join, normalize } from "node:path";
 import { HA } from "./ha.ts";
 import { Devices } from "./devices.ts";
-import { Media, radio } from "./media.ts";
+import { Media, radio, thumb } from "./media.ts";
 import { store } from "./store.ts";
 import { THEMES, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
@@ -171,6 +172,14 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const pic = await media.art(art[1]).catch(() => null);
     if (!pic) return json(res, 404, { error: "no picture" });
     res.writeHead(200, { ...CORS, "Content-Type": pic.type, "Cache-Control": "private, max-age=86400" });
+    res.end(pic.data);
+    return;
+  }
+  const th = /^\/api\/thumb\/([a-f0-9]+)$/.exec(path);
+  if (m === "GET" && th) {
+    const pic = await thumb(th[1]);
+    if (!pic) return json(res, 404, { error: "no picture" });
+    res.writeHead(200, { ...CORS, "Content-Type": pic.type, "Cache-Control": "private, max-age=604800" });
     res.end(pic.data);
     return;
   }

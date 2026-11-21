@@ -8,6 +8,7 @@
  *
  * Internet radio: the public Radio Browser directory. No account, no key.
  */
+import { createHash } from "node:crypto";
 import type { HA } from "./ha.ts";
 import type { Devices } from "./devices.ts";
 import type { MediaItem, MediaSources } from "../../../packages/core/src/index.ts";
@@ -15,6 +16,34 @@ import type { MediaItem, MediaSources } from "../../../packages/core/src/index.t
 interface SonosEntry { id: string; title: string; service: string; art?: string }
 
 const unescapeXml = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+
+/**
+ * Pictures of things to play are fetched by the hub, not by the phone: several services
+ * refuse a browser that asks directly, and the phone should not be calling them anyway.
+ * Only addresses the hub itself handed out can be asked for.
+ */
+const pictures = new Map<string, string>();
+const fetched = new Map<string, { type: string; data: Buffer }>();
+function picture(url: string | undefined): string | undefined {
+  if (!url || !/^https?:\/\//.test(url)) return undefined;
+  const token = createHash("sha256").update(url).digest("hex").slice(0, 24);
+  pictures.set(token, url);
+  return `/api/thumb/${token}`;
+}
+export async function thumb(token: string): Promise<{ type: string; data: Buffer } | null> {
+  const hit = fetched.get(token);
+  if (hit) return hit;
+  const url = pictures.get(token);
+  if (!url) return null;
+  const r = await fetch(url, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+  const type = r?.headers.get("content-type") ?? "";
+  if (!r?.ok || !type.startsWith("image/")) return null;
+  const data = Buffer.from(await r.arrayBuffer());
+  if (data.length > 3_000_000) return null;
+  if (fetched.size >= 300) fetched.delete(fetched.keys().next().value!);
+  fetched.set(token, { type, data });
+  return fetched.get(token)!;
+}
 
 const browsed = new Map<string, { at: number; items: SonosEntry[] }>();
 
@@ -74,7 +103,7 @@ export async function radio(q: string, tag: string): Promise<MediaItem[]> {
   const items = found.filter((s) => s.name?.trim() && s.stationuuid).map((s): MediaItem => {
     const codec = (s.codec || "MP3").toLowerCase();
     streamType.set(s.stationuuid, codec.startsWith("aac") ? "audio/aac" : codec === "ogg" ? "audio/ogg" : "audio/mpeg");
-    return { kind: "radio", id: s.stationuuid, title: s.name.trim(), subtitle: [s.country, s.tags.split(",").slice(0, 3).join(", ")].filter(Boolean).join(" · "), art: s.favicon?.startsWith("https") ? s.favicon : undefined };
+    return { kind: "radio", id: s.stationuuid, title: s.name.trim(), subtitle: [s.country, s.tags.split(",").slice(0, 3).join(", ")].filter(Boolean).join(" · "), art: picture(s.favicon) };
   });
   stations.set(cacheKey, { at: Date.now(), items });
   return items;
@@ -104,9 +133,9 @@ export class Media {
     if (p.integration === "sonos" && p.host) {
       const [favs, lists] = await Promise.all([sonosBrowse(p.host, "FV:2"), sonosBrowse(p.host, "SQ:").catch(() => [])]);
       const groups = new Map<string, MediaItem[]>();
-      for (const f of favs) groups.set(f.service, [...(groups.get(f.service) ?? []), { kind: "favourite", id: f.id, title: f.title, subtitle: f.service, art: f.art }]);
+      for (const f of favs) groups.set(f.service, [...(groups.get(f.service) ?? []), { kind: "favourite", id: f.id, title: f.title, subtitle: f.service, art: picture(f.art) }]);
       out.favourites = [...groups].map(([service, items]) => ({ service, items })).sort((x, y) => y.items.length - x.items.length);
-      out.playlists = lists.map((l) => ({ kind: "playlist", id: l.title, title: l.title, art: l.art }));
+      out.playlists = lists.map((l) => ({ kind: "playlist", id: l.title, title: l.title, art: picture(l.art) }));
       out.inputs = list.filter((x) => /^(tv|line-in)$/i.test(x)).map((x) => ({ kind: "input", id: x, title: x }));
     } else {
       out.inputs = list.map((x) => ({ kind: "input", id: x, title: x }));
