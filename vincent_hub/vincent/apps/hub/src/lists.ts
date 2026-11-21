@@ -57,4 +57,14 @@ export class Lists {
     const r = await this.ha.rest("POST", `/config/config_entries/flow/${flow.flow_id}`, { todo_list_name: clean });
     if (r?.type !== "create_entry") throw new Error(r?.reason === "already_configured" ? "There is already a list by that name." : "The hub could not make that list.");
   }
+
+  /** The lists every home starts with. Skips one the home already has under a similar name. */
+  async seed(names: string[]): Promise<void> {
+    const have = this.all().map((l) => l.name.toLowerCase().replace(/[^a-z]/g, ""));
+    for (const name of names) {
+      const key = name.toLowerCase().replace(/[^a-z]/g, "");
+      if (have.some((h) => h === key || h === `${key}list`)) continue;
+      await this.create(name).catch((e: Error) => console.log(`[lists] could not make "${name}": ${e.message}`));
+    }
+  }
 }

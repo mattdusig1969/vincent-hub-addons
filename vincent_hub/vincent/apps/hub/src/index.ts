@@ -95,6 +95,15 @@ const changed = () => {
   if (pending) return;
   pending = setTimeout(() => { pending = undefined; for (const s of streams) s.write("event: changed\ndata: 1\n\n"); }, 150);
 };
+// Every home starts with three lists. Made once, after setup, when the hub is reachable.
+const STARTER_LISTS = ["Shopping", "To Do", "Recipes"];
+let seeding = false;
+setInterval(() => {
+  if (seeding || store.listsSeeded || !store.setUp || !ha.connected) return;
+  seeding = true;
+  lists.seed(STARTER_LISTS).then(() => { store.setListsSeeded(); devices.invalidate(); }).catch(() => {}).finally(() => { seeding = false; });
+}, 5000);
+
 ha.onChange = (entityId) => {
   if (entityId === "") { devices.invalidate(); changed(); }
   else if (devices.shown(entityId) || place.shows(entityId) || lists.shows(entityId)) changed();

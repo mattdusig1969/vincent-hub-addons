@@ -14,6 +14,8 @@ interface Saved {
   /** Integrations the household said yes to: every device they bring is added. */
   addedEntries: string[];
   reviewed: boolean;
+  /** The starter lists were made once; a list the household deletes stays deleted. */
+  listsSeeded?: boolean;
   owner?: string;
   /** The admin PIN, salted and hashed. Never stored in the clear. */
   pin?: { salt: string; hash: string };
@@ -143,6 +145,8 @@ export const store = {
   setPlace(p: SavedPlace): void { saved.place = { ...saved.place, ...p }; save(); },
   get contact(): string { return saved.contact ?? ""; },
   setContact(c: string): void { saved.contact = c.trim().slice(0, 120); save(); },
+  get listsSeeded(): boolean { return !!saved.listsSeeded; },
+  setListsSeeded(): void { saved.listsSeeded = true; save(); },
   get reviewed(): boolean { return saved.reviewed; },
   setReviewed(): void { if (!saved.reviewed) { saved.reviewed = true; save(); } },
 };
