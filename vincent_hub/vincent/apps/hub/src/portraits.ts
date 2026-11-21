@@ -69,9 +69,13 @@ export class Portraits {
 
   /** Back to the standard picture. */
   reset(character: string): void {
-    rmSync(this.file(character), { force: true }); rmSync(this.file(character) + ".at", { force: true });
+    rmSync(this.file(character), { force: true }); rmSync(this.file(character) + ".at", { force: true }); rmSync(this.file(character) + ".photo", { force: true });
+    this.claims.delete(character);
     this.jobs.delete(character);
   }
+
+  /** The photo each character is being, or was last, drawn in during this run of the service. */
+  private claims = new Map<string, string>();
 
   start(ids: string[], style: string): void {
     if (!this.key()) throw new Error("Pictures of your home are not switched on for this hub yet.");
@@ -101,6 +105,22 @@ export class Portraits {
     }
   }
 
+  /**
+   * One photo per character, so with enough photos nobody shares a room.
+   * A photo no other character is standing in comes first; among those, one this character was not just drawn in.
+   */
+  private photoFor(id: string): string {
+    const photos = this.photos();
+    const used = (c: string) => { try { return existsSync(this.file(c)) ? readFileSync(this.file(c) + ".photo", "utf8") : ""; } catch { return ""; } };
+    const last = used(id);
+    const taken = new Set(CHARACTERS.filter((c) => c.id !== id).map((c) => this.claims.get(c.id) ?? used(c.id)));
+    const from = last ? photos.indexOf(last) + 1 : Math.max(0, CHARACTERS.findIndex((c) => c.id === id));
+    const order = photos.map((_, i) => photos[(from + i) % photos.length]);
+    const pick = order.find((p) => !taken.has(p) && p !== last) ?? order.find((p) => !taken.has(p)) ?? order.find((p) => p !== last) ?? order[0];
+    this.claims.set(id, pick);
+    return pick;
+  }
+
   private async make(id: string, style: string): Promise<void> {
     const inline = (file: string, type: string) => ({ inline_data: { mime_type: type, data: readFileSync(file).toString("base64") } });
     const parts: unknown[] = [];
@@ -111,12 +131,13 @@ export class Portraits {
       ? "sitting on a table, shelf or counter in this home, at the size of a small cabinet, whole object in view"
       : "standing naturally in this home, seen from the waist up, looking at the camera with a friendly expression";
     parts.push({ text:
-      `The first image shows a character: ${who}. The other images are photographs of one real home. ` +
+      `The first image shows a character: ${who}. The second image is a photograph of a real home. ` +
       `Make a new upright 4:5 picture of exactly this character, same face or design and same clothing, ${where}. ` +
-      "Use the home in the photographs: its real architecture, furniture, colours and light. Do not invent a different place and do not include any people from the photographs. " +
+      "Use the place in the photograph: its real architecture, furniture, colours and light. Do not invent a different place and do not include any people from the photograph. " +
       "Keep the polished, colourful illustrated look of the first image. No text, no border, no watermark." });
     if (refs[0]) parts.push(inline(refs[0], "image/jpeg"));
-    for (const p of this.photos().slice(0, 3)) parts.push(inline(this.photoFile(p), "image/jpeg"));
+    const photo = this.photoFor(id);
+    parts.push(inline(this.photoFile(photo), "image/jpeg"));
 
     let why = "The picture could not be made. Try again.";
     for (const model of MODELS) {
@@ -130,6 +151,7 @@ export class Portraits {
         if (got?.data) {
           writeFileSync(this.file(id), Buffer.from(got.data, "base64"));
           writeFileSync(this.file(id) + ".at", String(Date.now()));
+          writeFileSync(this.file(id) + ".photo", photo);
           return;
         }
         if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === "SAFETY") why = "The picture service would not use one of these photos. Try different photos.";
