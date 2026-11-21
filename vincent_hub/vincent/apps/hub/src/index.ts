@@ -212,7 +212,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
-      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style === HOME_STYLE.id && !portraits.photos().length ? store.custom.shape : store.style, custom: store.custom, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => [c.id, store.voices[c.id] ?? defaultVoice(c.id)])), unlocked: isUnlocked(key),
+      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style === HOME_STYLE.id && !portraits.photos().length ? store.custom.shape : store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => [c.id, store.voices[c.id] ?? defaultVoice(c.id)])), unlocked: isUnlocked(key),
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
@@ -347,6 +347,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       store.setCustom({ font, shape });
     }
     if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character)) store.setCharacter(b.character);
+    if (["off", "daily", "hourly"].includes(b.rotate)) store.setRotate(b.rotate);
     if (b.voice && typeof b.voice === "object") {
       const who = CHARACTERS.find((c) => c.id === b.voice.character);
       const locale = String(b.voice.locale ?? ""), voice = String(b.voice.voice ?? "");

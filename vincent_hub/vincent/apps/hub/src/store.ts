@@ -35,6 +35,8 @@ interface Saved {
   style?: string;
   custom?: { font: string; shape: string };
   character?: string;
+  /** off = always the chosen character; daily / hourly = a different host by turns. */
+  rotate?: string;
   /** character id -> the voice the home chose for it */
   voices?: Record<string, { locale: string; voice: string }>;
   homeName?: string;
@@ -156,6 +158,8 @@ export const store = {
   setCustom(c: { font: string; shape: string }): void { saved.custom = c; save(); },
   get character(): string { return saved.character ?? "vincent"; },
   setCharacter(c: string): void { saved.character = c; save(); },
+  get rotate(): string { return saved.rotate ?? "off"; },
+  setRotate(r: string): void { saved.rotate = r; save(); },
   get voices(): Record<string, { locale: string; voice: string }> { return saved.voices ?? {}; },
   setVoice(character: string, v: { locale: string; voice: string }): void { saved.voices = { ...saved.voices, [character]: v }; save(); },
   get place(): SavedPlace | undefined { return saved.place; },
