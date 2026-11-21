@@ -39,8 +39,10 @@ export interface Device {
   category: Category;
   status: ListStatus;
   needs: Needs;
-  /** Room name, when the hub knows one. */
-  room?: string;
+  /** The rooms it is in (room ids). A device can be in several: a speaker that covers the kitchen and the dining room. */
+  rooms: string[];
+  /** A room name the hub can guess (the device told it, e.g. a Sonos named "Office"). Offered when adding. */
+  suggestedRoom?: string;
   /** The controls this device offers. Empty until it is ready. */
   controls: Control[];
 }
@@ -69,6 +71,23 @@ export type Action =
   | "open" | "close";
 
 export interface ControlRequest { id: string; action: Action; value?: number }
+
+export interface Room {
+  id: string;
+  name: string;
+  /** Address of the room's photo on the hub (changes when the photo does), if one was taken. */
+  photo?: string;
+}
+
+/** The pre-made looks. The hub remembers the home's choice so every phone and tablet matches. */
+export const THEMES = [
+  { id: "ivory", name: "Ivory" },
+  { id: "midnight", name: "Midnight" },
+  { id: "slate", name: "Slate" },
+  { id: "forest", name: "Forest" },
+  { id: "terracotta", name: "Terracotta" },
+  { id: "onyx", name: "Onyx" },
+] as const;
 
 export interface HubStatus {
   connected: boolean;

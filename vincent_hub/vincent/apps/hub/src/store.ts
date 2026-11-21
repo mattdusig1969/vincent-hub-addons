@@ -2,11 +2,11 @@
  * Vincent's own choices for this home, kept on the hub: which devices the household
  * added, which it ignored. Home Assistant is never asked to forget anything.
  */
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { ListStatus } from "../../../packages/core/src/index.ts";
+import type { ListStatus, Room } from "../../../packages/core/src/index.ts";
 
 interface Saved {
   /** device id -> added | ignored. Absent = found. */
@@ -21,6 +21,14 @@ interface Saved {
   ha?: { username: string; password: string };
   /** Phones and tablets allowed to talk to this home: sha-256 of each one's key -> its name. */
   paired?: Record<string, { name: string; since: string }>;
+  /** Vincent's own rooms. Home Assistant allows one room per device; Vincent allows several. */
+  rooms?: { id: string; name: string; photoAt?: number }[];
+  /** device id -> room ids */
+  deviceRooms?: Record<string, string[]>;
+  /** For a device that was waiting for a yes: the rooms chosen for whatever it brings. */
+  entryRooms?: Record<string, string[]>;
+  theme?: string;
+  homeName?: string;
 }
 
 // On the hub an add-on's durable folder is /data.
@@ -74,6 +82,53 @@ export const store = {
     return key;
   },
   paired(key: string): boolean { return !!key && !!saved.paired?.[sha(key)]; },
+  // Rooms
+  rooms(): Room[] {
+    return (saved.rooms ?? []).map((r) => ({ id: r.id, name: r.name, ...(r.photoAt ? { photo: `/api/rooms/${r.id}/photo?v=${r.photoAt}` } : {}) }));
+  },
+  /** Finds the room by name (any capitalisation) or makes it. */
+  room(name: string): string {
+    const clean = name.trim().slice(0, 40);
+    const list = (saved.rooms ??= []);
+    const same = list.find((r) => r.name.toLowerCase() === clean.toLowerCase());
+    if (same) return same.id;
+    const id = randomBytes(6).toString("hex");
+    list.push({ id, name: clean });
+    save();
+    return id;
+  },
+  renameRoom(id: string, name: string): void {
+    const r = saved.rooms?.find((x) => x.id === id);
+    if (r && name.trim()) { r.name = name.trim().slice(0, 40); save(); }
+  },
+  deleteRoom(id: string): void {
+    saved.rooms = (saved.rooms ?? []).filter((r) => r.id !== id);
+    for (const map of [saved.deviceRooms ?? {}, saved.entryRooms ?? {}])
+      for (const k of Object.keys(map)) map[k] = map[k].filter((r) => r !== id);
+    rmSync(this.photoFile(id), { force: true });
+    save();
+  },
+  photoFile(id: string): string { return join(dir, "rooms", `${id.replace(/[^a-f0-9]/g, "")}.jpg`); },
+  setPhoto(id: string, jpeg: Buffer): boolean {
+    const r = saved.rooms?.find((x) => x.id === id);
+    if (!r) return false;
+    mkdirSync(join(dir, "rooms"), { recursive: true });
+    writeFileSync(this.photoFile(id), jpeg);
+    r.photoAt = Date.now();
+    save();
+    return true;
+  },
+  roomsOf(id: string, entryIds: string[] = []): string[] {
+    const known = new Set((saved.rooms ?? []).map((r) => r.id));
+    const own = saved.deviceRooms?.[id] ?? entryIds.flatMap((e) => saved.entryRooms?.[e] ?? []);
+    return [...new Set(own)].filter((r) => known.has(r));
+  },
+  setRooms(id: string, rooms: string[]): void { (saved.deviceRooms ??= {})[id] = rooms; save(); },
+  setEntryRooms(entryId: string, rooms: string[]): void { (saved.entryRooms ??= {})[entryId] = rooms; save(); },
+  get homeName(): string { return saved.homeName ?? ""; },
+  setHomeName(name: string): void { saved.homeName = name.trim().slice(0, 40); save(); },
+  get theme(): string { return saved.theme ?? "ivory"; },
+  setTheme(theme: string): void { saved.theme = theme; save(); },
   get reviewed(): boolean { return saved.reviewed; },
   setReviewed(): void { if (!saved.reviewed) { saved.reviewed = true; save(); } },
 };

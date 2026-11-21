@@ -43,8 +43,6 @@ interface Snapshot {
   controls: Map<string, { entityId: string; deviceId: string; domain: string }>;
   /** device id -> waiting flow */
   flows: Map<string, { flowId: string; handler: string }>;
-  /** room name -> Home Assistant area id */
-  rooms: Map<string, string>;
 }
 
 export class Devices {
@@ -62,16 +60,21 @@ export class Devices {
   private async snapshot(): Promise<Snapshot> {
     // The structure is cached briefly; live values are filled in fresh on every read.
     if (!this.snap || Date.now() - this.at > 5000) { this.snap = await this.build(); this.at = Date.now(); }
-    else for (const d of this.snap.devices) d.status = this.statusOf.get(d.id)?.() ?? d.status;
-    for (const d of this.snap.devices)
+    for (const d of this.snap.devices) {
+      // Vincent's own choices are read fresh every time: they change without Home Assistant knowing.
+      const entryIds = this.entriesOf.get(d.id) ?? [];
+      d.status = store.status(d.id, entryIds);
+      d.rooms = store.roomsOf(d.id, entryIds);
       d.controls = d.controls.map((c) => {
         const ref = this.snap!.controls.get(c.id)!;
         return project(c.id, c.name, ref.domain, this.ha.states.get(ref.entityId));
       });
+    }
     return this.snap;
   }
 
-  private statusOf = new Map<string, () => Device["status"]>();
+  /** device id -> the Home Assistant integrations that brought it */
+  private entriesOf = new Map<string, string[]>();
 
   private async build(): Promise<Snapshot> {
     const ha = this.ha;
@@ -84,8 +87,8 @@ export class Devices {
     ]);
     const entryDomain = new Map<string, string>(entries.map((e: any) => [e.entry_id, e.domain]));
     const areaName = new Map<string, string>(areas.map((a: any) => [a.area_id, a.name]));
-    const snap: Snapshot = { devices: [], controls: new Map(), flows: new Map(), rooms: new Map(areas.map((a: any) => [a.name, a.area_id])) };
-    this.statusOf.clear();
+    const snap: Snapshot = { devices: [], controls: new Map(), flows: new Map() };
+    this.entriesOf.clear();
 
     for (const d of devs) {
       if (d.entry_type === "service" || d.disabled_by) continue;
@@ -104,16 +107,17 @@ export class Devices {
       if (!controls.length) continue; // nothing the app could do with it
       const integration = (d.config_entries as string[]).map((id) => entryDomain.get(id)).find(Boolean) ?? "";
       const entryIds = d.config_entries as string[];
-      this.statusOf.set(d.id, () => store.status(d.id, entryIds));
+      this.entriesOf.set(d.id, entryIds);
       snap.devices.push({
         id: d.id,
         name: d.name_by_user || d.name || d.model || "Unnamed device",
         maker: d.manufacturer || titled(integration),
         model: d.model || "",
         category: best!.category,
-        status: store.status(d.id, entryIds),
+        status: "found",
         needs: "ready",
-        room: d.area_id ? areaName.get(d.area_id) : undefined,
+        rooms: [],
+        suggestedRoom: d.area_id ? areaName.get(d.area_id) : undefined,
         controls,
       });
     }
@@ -123,15 +127,15 @@ export class Devices {
       const id = `found:${f.handler}:${f.context?.unique_id ?? f.flow_id}`;
       const needs: Needs = LOGIN.has(f.handler) ? "login" : "confirm";
       snap.flows.set(id, { flowId: f.flow_id, handler: f.handler });
-      this.statusOf.set(id, () => store.status(id));
       snap.devices.push({
         id,
         name: f.context?.title_placeholders?.name || titled(f.handler),
         maker: titled(f.handler),
         model: "",
         category: BY_INTEGRATION[f.handler] ?? "other",
-        status: store.status(id),
+        status: "found",
         needs,
+        rooms: [],
         controls: [],
       });
     }
@@ -140,13 +144,13 @@ export class Devices {
     return snap;
   }
 
-  /** The household chose a device. Ready ones are instant; waiting ones get their yes. */
-  async add(id: string): Promise<AddResult> {
+  /** The household chose a device and said where it is. Ready ones are instant; waiting ones get their yes. */
+  async add(id: string, rooms: string[]): Promise<AddResult> {
     const snap = await this.snapshot();
     const dev = snap.devices.find((d) => d.id === id);
     if (!dev) return { ok: false, message: "That device is no longer on the network." };
     const flow = snap.flows.get(id);
-    if (!flow) { store.set(id, "added"); return { ok: true }; }
+    if (!flow) { store.set(id, "added"); store.setRooms(id, rooms); return { ok: true }; }
 
     if (dev.needs === "login")
       return { ok: false, needs: "login", message: `${dev.maker} asks for a sign-in or a pairing code. That step is coming soon.` };
@@ -156,27 +160,17 @@ export class Devices {
     try { r = await this.ha.rest("POST", `/config/config_entries/flow/${flow.flowId}`, {}); }
     catch (e) { return { ok: false, needs: "login", message: `${dev.maker} needs more than a yes. That step is coming soon.` }; }
     if (r?.type === "create_entry" && r.result?.entry_id) {
-      store.addEntry(r.result.entry_id); // every device this brings is added
+      store.addEntry(r.result.entry_id); // every device this brings is added, in the chosen rooms
+      store.setEntryRooms(r.result.entry_id, rooms);
       this.invalidate();
       return { ok: true };
     }
     return { ok: false, needs: "login", message: `${dev.maker} needs more than a yes. That step is coming soon.` };
   }
 
-  async rooms(): Promise<string[]> { return [...(await this.snapshot()).rooms.keys()].sort((a, b) => a.localeCompare(b)); }
-
-  /** Puts a device in a room, making the room if it is new. An empty name takes it out of its room. */
-  async setRoom(id: string, room: string): Promise<void> {
-    const snap = await this.snapshot();
-    if (snap.flows.has(id) || !snap.devices.some((d) => d.id === id)) throw new Error("That device cannot be given a room yet.");
-    const name = room.trim().slice(0, 40);
-    let areaId: string | null = null;
-    if (name) {
-      const same = [...snap.rooms].find(([n]) => n.toLowerCase() === name.toLowerCase());
-      areaId = same ? same[1] : (await this.ha.call({ type: "config/area_registry/create", name })).area_id;
-    }
-    await this.ha.call({ type: "config/device_registry/update", device_id: id, area_id: areaId });
-    this.invalidate();
+  async setRooms(id: string, rooms: string[]): Promise<void> {
+    if (!(await this.snapshot()).devices.some((d) => d.id === id)) throw new Error("That device is no longer on the network.");
+    store.setRooms(id, rooms);
   }
 
   async setStatus(id: string, status: "found" | "ignored"): Promise<void> {

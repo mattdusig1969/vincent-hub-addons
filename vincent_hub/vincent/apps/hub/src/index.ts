@@ -11,7 +11,10 @@
  *   POST /api/setup                  first-time only: owner name + admin PIN -> this device's key
  *   POST /api/pair                   {pin, name} -> a key for another phone or tablet
  *   POST /api/unlock | /api/lock     {pin} opens settings on this device for ten minutes
- *   POST /api/devices/:id/room       {room} put it in a room (made if new)
+ *   POST /api/devices/:id/add|rooms  {rooms, newRooms} choose it / say which rooms it is in (several allowed)
+ *   POST /api/home                   {name, theme, newRooms} the home's name, look and first rooms
+ *   POST /api/rooms, /api/rooms/:id/rename|delete|photo      rooms and their photos (photo = a JPEG body)
+ *   GET  /api/rooms/:id/photo
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
  *
  * Serves the built app too, when apps/app/dist exists.
@@ -24,7 +27,7 @@ import { extname, join, normalize } from "node:path";
 import { HA } from "./ha.ts";
 import { Devices } from "./devices.ts";
 import { store } from "./store.ts";
-import type { HubStatus, SetupRequest } from "../../../packages/core/src/index.ts";
+import { THEMES, type HubStatus, type SetupRequest } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
@@ -68,6 +71,13 @@ const json = (res: ServerResponse, code: number, body: unknown) => {
   res.end(JSON.stringify(body));
 };
 
+async function raw(req: IncomingMessage, limit: number): Promise<Buffer> {
+  const parts: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) { size += chunk.length; if (size > limit) throw new Error("That is too large."); parts.push(chunk as Buffer); }
+  return Buffer.concat(parts);
+}
+
 async function body(req: IncomingMessage): Promise<any> {
   let raw = "";
   for await (const chunk of req) { raw += chunk; if (raw.length > 100_000) throw new Error("request too large"); }
@@ -78,7 +88,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   const m = req.method ?? "GET";
 
   if (m === "GET" && path === "/api/status") {
-    const s: HubStatus = { connected: ha.connected, version: ha.version, homeName: ha.homeName, reviewed: store.reviewed, setUp: store.setUp, owner: store.owner };
+    const s: HubStatus = { connected: ha.connected, version: ha.version, homeName: store.homeName || ha.homeName, reviewed: store.reviewed, setUp: store.setUp, owner: store.owner };
     return json(res, 200, s);
   }
   if (m === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
@@ -123,20 +133,55 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (!ha.connected) return json(res, 503, { error: "The hub is starting. Try again in a moment." });
 
   // Everyday use: no PIN.
-  if (m === "GET" && path === "/api/devices") return json(res, 200, { devices: await devices.all(), rooms: await devices.rooms(), unlocked: isUnlocked(key) });
+  if (m === "GET" && path === "/api/devices")
+    return json(res, 200, { devices: await devices.all(), rooms: store.rooms(), theme: store.theme, unlocked: isUnlocked(key) });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
+  const photo = /^\/api\/rooms\/([a-f0-9]+)\/photo$/.exec(path);
+  if (m === "GET" && photo) {
+    const file = store.photoFile(photo[1]);
+    if (!existsSync(file)) return json(res, 404, { error: "no photo" });
+    res.writeHead(200, { ...CORS, "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=31536000, immutable" });
+    res.end(await readFile(file));
+    return;
+  }
 
   // Settings: the PIN first.
-  const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore|room)$/.exec(path);
-  if (m === "POST" && (act || path === "/api/reviewed")) {
-    if (!isUnlocked(key)) return json(res, 403, { code: "pin", error: "The admin PIN is needed for that." });
-    if (!act) { store.setReviewed(); return json(res, 200, { ok: true }); }
+  if (m !== "POST") return json(res, 404, { error: "not found" });
+  if (!isUnlocked(key)) return json(res, 403, { code: "pin", error: "The admin PIN is needed for that." });
+  const done = () => { changed(); return json(res, 200, { ok: true }); };
+  /** Room ids for a list of room ids and/or new room names. */
+  const roomIds = (b: any): string[] => [
+    ...(Array.isArray(b.rooms) ? b.rooms.map(String) : []),
+    ...(Array.isArray(b.newRooms) ? b.newRooms.map(String).filter((n: string) => n.trim()).map((n: string) => store.room(n)) : []),
+  ];
+
+  if (path === "/api/reviewed") { store.setReviewed(); return done(); }
+  if (path === "/api/home") {
+    const b = await body(req);
+    if (typeof b.name === "string" && b.name.trim()) store.setHomeName(b.name);
+    if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) store.setTheme(b.theme);
+    roomIds(b); // rooms named during home setup
+    return done();
+  }
+  if (path === "/api/rooms") { const b = await body(req); const id = store.room(String(b.name ?? "")); changed(); return json(res, 200, { ok: true, id }); }
+  const room = /^\/api\/rooms\/([a-f0-9]+)\/(rename|delete|photo)$/.exec(path);
+  if (room) {
+    if (room[2] === "delete") store.deleteRoom(room[1]);
+    else if (room[2] === "rename") store.renameRoom(room[1], String((await body(req)).name ?? ""));
+    else {
+      const jpeg = await raw(req, 4_000_000);
+      if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return json(res, 400, { error: "That is not a photo." });
+      if (!store.setPhoto(room[1], jpeg)) return json(res, 404, { error: "That room is gone." });
+    }
+    return done();
+  }
+  const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore|rooms)$/.exec(path);
+  if (act) {
     const id = decodeURIComponent(act[1]);
-    if (act[2] === "add") { const r = await devices.add(id); changed(); return json(res, 200, r); }
-    if (act[2] === "room") { await devices.setRoom(id, String((await body(req)).room ?? "")); changed(); return json(res, 200, { ok: true }); }
+    if (act[2] === "add") { const r = await devices.add(id, roomIds(await body(req))); changed(); return json(res, 200, r); }
+    if (act[2] === "rooms") { await devices.setRooms(id, roomIds(await body(req))); return done(); }
     await devices.setStatus(id, act[2] === "ignore" ? "ignored" : "found");
-    changed();
-    return json(res, 200, { ok: true });
+    return done();
   }
   json(res, 404, { error: "not found" });
 }
