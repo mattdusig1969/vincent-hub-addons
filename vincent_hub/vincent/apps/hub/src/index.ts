@@ -44,6 +44,8 @@ import { Devices } from "./devices.ts";
 import { Media, radio, thumb } from "./media.ts";
 import { Place } from "./place.ts";
 import { Lists } from "./lists.ts";
+import { Portraits, pictureType } from "./portraits.ts";
+import { dir as dataDir } from "./store.ts";
 import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
 import { store } from "./store.ts";
@@ -55,6 +57,7 @@ const devices = new Devices(ha);
 const media = new Media(ha, devices);
 const place = new Place(ha);
 const lists = new Lists(ha);
+const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
 const flows = new Flows(ha, devices);
 // A found device with nothing to ask is answered with a plain yes; anything more goes to the app as a question.
 devices.steps = async (flowId, handler, rooms) => {
@@ -249,6 +252,16 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return;
   }
   if (m === "GET" && path === "/api/matter") return json(res, 200, matter);
+  if (m === "GET" && path === "/api/portraits") return json(res, 200, portraits.status());
+  const pic = /^\/api\/portraits\/(photo\/)?([a-z0-9]+)$/.exec(path);
+  if (m === "GET" && pic) {
+    const file = pic[1] ? portraits.photoFile(pic[2]) : portraits.file(pic[2]);
+    if (!existsSync(file)) return json(res, 404, { error: "no picture" });
+    const data = await readFile(file);
+    res.writeHead(200, { ...CORS, "Content-Type": pictureType(data), "Cache-Control": "private, max-age=31536000, immutable" });
+    res.end(data);
+    return;
+  }
   if (m === "GET" && path === "/api/brands") return json(res, 200, { brands: brandList() });
   if (m === "GET" && path === "/api/software") return json(res, 200, await software());
   const photo = /^\/api\/rooms\/([a-f0-9]+)\/photo$/.exec(path);
@@ -304,6 +317,22 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       .finally(changed);
     return json(res, 200, matter);
   }
+  if (path === "/api/portraits/photos") {
+    const jpeg = await raw(req, 4_000_000);
+    if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return json(res, 400, { error: "That is not a photo." });
+    portraits.addPhoto(jpeg);
+    return done();
+  }
+  const pdel = /^\/api\/portraits\/photo\/([a-z0-9]+)\/delete$/.exec(path);
+  if (pdel) { portraits.removePhoto(pdel[1]); return done(); }
+  if (path === "/api/portraits/generate") {
+    const b = await body(req);
+    const ids = Array.isArray(b.characters) && b.characters.length ? b.characters.map(String) : CHARACTERS.map((c) => c.id);
+    portraits.start(ids, store.style);
+    return done();
+  }
+  const preset = /^\/api\/portraits\/([a-z]+)\/reset$/.exec(path);
+  if (preset) { portraits.reset(preset[1]); return done(); }
   if (path === "/api/spotify/link") return json(res, 200, await media.spotifyLink(changed));
   if (path === "/api/spotify/forget") { await media.spotifyForget(); return done(); }
   if (path === "/api/reviewed") { store.setReviewed(); return done(); }

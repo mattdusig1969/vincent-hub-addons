@@ -238,6 +238,8 @@ export const STYLES = [
   { id: "traditional", name: "Traditional", note: "Serif headings, soft corners" },
   { id: "modern", name: "Modern", note: "Clean sans, crisp corners" },
   { id: "contemporary", name: "Contemporary", note: "Rounded, no outlines" },
+  { id: "classy", name: "Classy", note: "Fine lettering, gold hairlines" },
+  { id: "trailer", name: "Trailer Park", note: "Loud, chunky, a good time" },
 ] as const;
 
 /** The home's concierge. Each has five voices per accent, named for their manner; `id` is the voice maker's own name. */
@@ -276,4 +278,16 @@ export interface VoiceChoice { locale: string; voice: string }
 export function defaultVoice(character: string): VoiceChoice {
   const c = CHARACTERS.find((x) => x.id === character) ?? CHARACTERS[0];
   return { locale: c.locale, voice: c.voice };
+}
+
+
+/** Pictures of the characters in this home. `version` is 0 while the standard picture is in use. */
+export interface PortraitJob { state: "idle" | "waiting" | "working" | "done" | "failed"; startedAt?: number; message?: string }
+export interface PortraitStatus {
+  /** False when this hub cannot make pictures (the service is not switched on). */
+  available: boolean;
+  photos: string[];
+  /** About how long one picture takes, in seconds. */
+  seconds: number;
+  characters: Record<string, PortraitJob & { version: number }>;
 }

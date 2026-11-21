@@ -1,5 +1,5 @@
 name: Vincent Hub
-version: "0.5.9"
+version: "0.6.0"
 slug: vincent_hub
 description: The Vincent hub service. Holds the home's device list and serves the Vincent app.
 arch:
@@ -15,3 +15,7 @@ ports:
   8870/tcp: 8870
 ports_description:
   8870/tcp: The Vincent app
+options:
+  image_key: ""
+schema:
+  image_key: password?
