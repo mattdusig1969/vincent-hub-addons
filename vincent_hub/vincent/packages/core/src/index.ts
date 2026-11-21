@@ -292,12 +292,12 @@ export interface PortraitStatus {
   photos: string[];
   /** About how long one picture takes, in seconds. */
   seconds: number;
-  characters: Record<string, PortraitJob & { version: number }>;
+  characters: Record<string, PortraitJob & { version: number; /** The outfit the home picture was drawn in. */ style?: string }>;
 }
 
 
 /** The household's own style: their home in the pictures, their choice of lettering and shapes. Offered once they have added a photo of their home. */
-export const HOME_STYLE = { id: "home", name: "My Home", note: "Your home, your choices" } as const;
+export const HOME_STYLE = { id: "home", name: "Custom Home", note: "Your photos, your choices" } as const;
 export const FONTS = [
   { id: "serif", name: "Bookish" },
   { id: "clean", name: "Clean" },
@@ -306,5 +306,11 @@ export const FONTS = [
   { id: "chunky", name: "Chunky" },
 ] as const;
 /** `shape` is one of STYLES: its corners, borders and buttons, and the characters' clothes in the pictures. */
-export interface CustomStyle { font: string; shape: string }
+export interface CustomStyle {
+  font: string; shape: string;
+  /** In My Home each character can wear a different style's outfit: character id to style id. */
+  outfits?: Record<string, string>;
+}
+/** The style whose outfit a character wears in My Home. */
+export const outfitOf = (custom: CustomStyle | undefined, character: string): string => custom?.outfits?.[character] ?? custom?.shape ?? "traditional";
 export const DEFAULT_CUSTOM: CustomStyle = { font: "serif", shape: "traditional" };

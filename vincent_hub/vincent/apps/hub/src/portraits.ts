@@ -62,14 +62,16 @@ export class Portraits {
       const job = this.jobs.get(c.id);
       let version = 0;
       try { version = Number(readFileSync(this.file(c.id) + ".at", "utf8")) || 0; } catch { /* none made */ }
-      characters[c.id] = { state: job?.state ?? "idle", startedAt: job?.startedAt, message: job?.message, version };
+      let style: string | undefined;
+      try { style = readFileSync(this.file(c.id) + ".style", "utf8"); } catch { /* drawn before outfits were kept */ }
+      characters[c.id] = { state: job?.state ?? "idle", startedAt: job?.startedAt, message: job?.message, version, style };
     }
     return { available: !!this.key(), photos: this.photos(), seconds: Math.round(this.typical), characters };
   }
 
   /** Back to the standard picture. */
   reset(character: string): void {
-    rmSync(this.file(character), { force: true }); rmSync(this.file(character) + ".at", { force: true }); rmSync(this.file(character) + ".photo", { force: true });
+    rmSync(this.file(character), { force: true }); rmSync(this.file(character) + ".at", { force: true }); rmSync(this.file(character) + ".photo", { force: true }); rmSync(this.file(character) + ".style", { force: true });
     this.claims.delete(character);
     this.jobs.delete(character);
   }
@@ -77,16 +79,16 @@ export class Portraits {
   /** The photo each character is being, or was last, drawn in during this run of the service. */
   private claims = new Map<string, string>();
 
-  start(ids: string[], style: string): void {
+  start(ids: string[], styleOf: (id: string) => string): void {
     if (!this.key()) throw new Error("Pictures of your home are not switched on for this hub yet.");
     if (!this.photos().length) throw new Error("Add a photo of your home first.");
-    const look = STYLES.some((s) => s.id === style) ? style : "traditional";
     for (const id of ids) {
       if (!CHARACTERS.some((c) => c.id === id)) continue;
       const now = this.jobs.get(id)?.state;
       if (now === "waiting" || now === "working") continue;
       this.jobs.set(id, { state: "waiting" });
-      this.waiting.push({ id, style: look });
+      const style = styleOf(id);
+      this.waiting.push({ id, style: STYLES.some((s) => s.id === style) ? style : "traditional" });
     }
     this.pump();
   }
@@ -152,6 +154,7 @@ export class Portraits {
           writeFileSync(this.file(id), Buffer.from(got.data, "base64"));
           writeFileSync(this.file(id) + ".at", String(Date.now()));
           writeFileSync(this.file(id) + ".photo", photo);
+          writeFileSync(this.file(id) + ".style", style);
           return;
         }
         if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === "SAFETY") why = "The picture service would not use one of these photos. Try different photos.";

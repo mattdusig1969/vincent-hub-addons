@@ -33,7 +33,7 @@ interface Saved {
   entryRooms?: Record<string, string[]>;
   theme?: string;
   style?: string;
-  custom?: { font: string; shape: string };
+  custom?: { font: string; shape: string; outfits?: Record<string, string> };
   character?: string;
   /** off = always the chosen character; daily / hourly = a different host by turns. */
   rotate?: string;
@@ -154,8 +154,8 @@ export const store = {
   setTheme(theme: string): void { saved.theme = theme; save(); },
   get style(): string { return saved.style ?? "traditional"; },
   setStyle(style: string): void { saved.style = style; save(); },
-  get custom(): { font: string; shape: string } { return saved.custom ?? { font: "serif", shape: "traditional" }; },
-  setCustom(c: { font: string; shape: string }): void { saved.custom = c; save(); },
+  get custom(): { font: string; shape: string; outfits?: Record<string, string> } { return saved.custom ?? { font: "serif", shape: "traditional" }; },
+  setCustom(c: { font: string; shape: string; outfits?: Record<string, string> }): void { saved.custom = c; save(); },
   get character(): string { return saved.character ?? "vincent"; },
   setCharacter(c: string): void { saved.character = c; save(); },
   get rotate(): string { return saved.rotate ?? "off"; },
