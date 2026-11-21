@@ -52,6 +52,8 @@ interface ControlBase {
   name: string;
   /** False when the device is offline or unpowered. */
   available: boolean;
+  /** When it last changed (ISO time), so the home screen can lead with what just happened. */
+  changed?: string;
 }
 
 export type Control =
@@ -116,6 +118,23 @@ export interface MediaSources {
   /** True when this player can play Spotify through the household's Sonos. */
   spotify: boolean;
 }
+
+/** The weather at the home. `condition` is a plain word: sunny, cloudy, partlycloudy, rainy, snowy, fog, clear-night… */
+export interface Weather {
+  place: string;
+  condition: string;
+  temperature: number;
+  unit: string;
+  high?: number;
+  low?: number;
+  days: { date: string; condition: string; high: number; low?: number }[];
+}
+
+export interface ListSummary { id: string; name: string; /** How many things are still to do. */ open: number }
+export interface ListItem { id: string; text: string; done: boolean }
+
+/** Where the home is. Empty until a ZIP code is given. */
+export interface HomePlace { zip: string; place: string; timeZone: string; contact: string }
 
 /** The hub's own software. */
 export interface Software { version: string; latest: string; canUpdate: boolean }

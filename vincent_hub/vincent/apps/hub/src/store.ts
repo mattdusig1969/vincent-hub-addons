@@ -29,7 +29,12 @@ interface Saved {
   entryRooms?: Record<string, string[]>;
   theme?: string;
   homeName?: string;
+  /** Where the home is, from the ZIP code given at setup. */
+  place?: SavedPlace;
+  /** How to reach the owner if the PIN is lost or the home has to be recovered. Kept on the hub only. */
+  contact?: string;
 }
+export interface SavedPlace { zip: string; country: string; place: string; timeZone?: string }
 
 // On the hub an add-on's durable folder is /data.
 export const dir = process.env.SUPERVISOR_TOKEN ? "/data" : fileURLToPath(new URL("../data", import.meta.url));
@@ -129,6 +134,10 @@ export const store = {
   setHomeName(name: string): void { saved.homeName = name.trim().slice(0, 40); save(); },
   get theme(): string { return saved.theme ?? "ivory"; },
   setTheme(theme: string): void { saved.theme = theme; save(); },
+  get place(): SavedPlace | undefined { return saved.place; },
+  setPlace(p: SavedPlace): void { saved.place = { ...saved.place, ...p }; save(); },
+  get contact(): string { return saved.contact ?? ""; },
+  setContact(c: string): void { saved.contact = c.trim().slice(0, 120); save(); },
   get reviewed(): boolean { return saved.reviewed; },
   setReviewed(): void { if (!saved.reviewed) { saved.reviewed = true; save(); } },
 };

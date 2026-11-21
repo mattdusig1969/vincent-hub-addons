@@ -237,7 +237,7 @@ export class Devices {
 
 function project(id: string, name: string, domain: string, s: HaState | undefined, integration: string): Control {
   const a = s?.attributes ?? {};
-  const base = { id, name, available: !!s && s.state !== "unavailable" && s.state !== "unknown" };
+  const base = { id, name, available: !!s && s.state !== "unavailable" && s.state !== "unknown", changed: s?.last_changed };
   switch (KIND[domain].kind) {
     case "light": {
       const modes: string[] = a.supported_color_modes ?? [];

@@ -12,7 +12,7 @@
  *   POST /api/pair                   {pin, name} -> a key for another phone or tablet
  *   POST /api/unlock | /api/lock     {pin} opens settings on this device for ten minutes
  *   POST /api/devices/:id/add|rooms  {rooms, newRooms} choose it / say which rooms it is in (several allowed)
- *   POST /api/home                   {name, theme, newRooms} the home's name, look and first rooms
+ *   POST /api/home                   {name, theme, newRooms, zip, timeZone, contact} the home's name, look, first rooms, where it is, how to reach the owner
  *   POST /api/rooms, /api/rooms/:id/rename|delete|photo      rooms and their photos (photo = a JPEG body)
  *   GET  /api/rooms/:id/photo
  *   GET  /api/media/:id/sources      a player's favourites, playlists and inputs
@@ -24,6 +24,7 @@
  *   GET  /api/thumb/:token           the picture of something to play (only ones the hub listed)
  *   GET  /api/art/:id                cover art of what a player is playing
  *   GET  /api/software               the hub software's version; POST /api/software/update brings the newest
+ *   GET  /api/lists/:id              a list's items; POST {op: add|done|reopen|remove|clear, text, item}; POST /api/lists {name} makes one
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
  *
  * Serves the built app too, when apps/app/dist exists.
@@ -36,6 +37,8 @@ import { extname, join, normalize } from "node:path";
 import { HA } from "./ha.ts";
 import { Devices } from "./devices.ts";
 import { Media, radio, thumb } from "./media.ts";
+import { Place } from "./place.ts";
+import { Lists } from "./lists.ts";
 import { store } from "./store.ts";
 import { THEMES, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
@@ -43,6 +46,8 @@ const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
 const devices = new Devices(ha);
 const media = new Media(ha, devices);
+const place = new Place(ha);
+const lists = new Lists(ha);
 
 /** On the hub, Vincent runs as an add-on and can ask the hub's supervisor about its own software. */
 async function supervisor(method: string, path: string, timeout = 20_000): Promise<any> {
@@ -69,8 +74,9 @@ const changed = () => {
 };
 ha.onChange = (entityId) => {
   if (entityId === "") { devices.invalidate(); changed(); }
-  else if (devices.shown(entityId)) changed();
+  else if (devices.shown(entityId) || place.shows(entityId) || lists.shows(entityId)) changed();
 };
+place.onDays = () => changed();
 ha.start();
 
 // The app is not always served from here (the iPhone app carries its own copy), so any origin may ask,
@@ -161,12 +167,19 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
 
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
-    return json(res, 200, { devices: await devices.all(), rooms: store.rooms(), theme: store.theme, unlocked: isUnlocked(key) });
+    return json(res, 200, {
+      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, unlocked: isUnlocked(key),
+      weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
+    });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
   const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm)$/.exec(path);
   if (med && m === "GET" && med[2] === "siriusxm") return json(res, 200, { groups: await media.siriusxm(med[1]) });
   if (med && m === "GET" && med[2] === "sources") return json(res, 200, await media.sources(med[1]));
   if (med && m === "POST" && med[2] === "play") { await media.play(med[1], await body(req)); return json(res, 200, { ok: true }); }
+  const li = /^\/api\/lists\/([a-f0-9]+)$/.exec(path);
+  if (li && m === "GET") return json(res, 200, await lists.items(li[1]));
+  if (li && m === "POST") { await lists.change(li[1], await body(req)); changed(); return json(res, 200, { ok: true }); }
+  if (m === "POST" && path === "/api/lists") { await lists.create(String((await body(req)).name ?? "")); devices.invalidate(); changed(); return json(res, 200, { ok: true }); }
   if (m === "GET" && path === "/api/spotify") return json(res, 200, await media.spotifyStatus());
   if (m === "GET" && path === "/api/spotify/browse") return json(res, 200, { items: await media.spotifyBrowse((new URL(req.url ?? "/", "http://hub").searchParams.get("id") ?? "").slice(0, 300)) });
   if (m === "GET" && path === "/api/spotify/search") {
@@ -234,6 +247,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (typeof b.name === "string" && b.name.trim()) store.setHomeName(b.name);
     if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) store.setTheme(b.theme);
     roomIds(b); // rooms named during home setup
+    if (typeof b.contact === "string" && b.contact.trim()) store.setContact(b.contact);
+    // The ZIP code last: it is the one part that can be refused, and the rest should stand either way.
+    if (typeof b.zip === "string" && b.zip.trim()) {
+      try { await place.set(b.zip, typeof b.timeZone === "string" ? b.timeZone : undefined); }
+      catch (e) { changed(); return json(res, 200, { ok: false, message: (e as Error).message }); }
+    }
     return done();
   }
   if (path === "/api/rooms") { const b = await body(req); const id = store.room(String(b.name ?? "")); changed(); return json(res, 200, { ok: true, id }); }
