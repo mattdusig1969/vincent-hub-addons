@@ -74,6 +74,11 @@ export const store = {
     if (ha) saved.ha = ha;
     save();
   },
+  setPin(pin: string): void {
+    const salt = randomBytes(16).toString("hex");
+    saved.pin = { salt, hash: scryptSync(pin, salt, 32).toString("hex") };
+    save();
+  },
   checkPin(pin: string): boolean {
     if (!saved.pin) return false;
     const got = scryptSync(pin, saved.pin.salt, 32);

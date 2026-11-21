@@ -10,6 +10,7 @@
  *   POST /api/control                {id, action, value} for an added device
  *   POST /api/setup                  first-time only: owner name + admin PIN -> this device's key
  *   POST /api/pair                   {pin, name} -> a key for another phone or tablet
+ *   POST /api/pin                    {pin, newPin} change the admin PIN
  *   POST /api/unlock | /api/lock     {pin} opens settings on this device for ten minutes
  *   POST /api/devices/:id/add|rooms  {rooms, newRooms} choose it / say which rooms it is in (several allowed)
  *   POST /api/home                   {name, theme, newRooms, zip, timeZone, contact} the home's name, look, first rooms, where it is, how to reach the owner
@@ -160,6 +161,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const r = pinOk((await body(req)).pin);
     if (r !== "ok") return pinRefusal(res, r);
     unlocked.set(key, Date.now() + UNLOCK_MS);
+    return json(res, 200, { ok: true });
+  }
+  // A new PIN needs the current one, even on a device whose settings are open.
+  if (m === "POST" && path === "/api/pin") {
+    const b = await body(req);
+    const r = pinOk(b.pin);
+    if (r !== "ok") return pinRefusal(res, r);
+    if (!/^\d{4,8}$/.test(String(b.newPin ?? ""))) return json(res, 400, { error: "A PIN is 4 to 8 digits." });
+    store.setPin(String(b.newPin));
     return json(res, 200, { ok: true });
   }
   if (m === "POST" && path === "/api/lock") { unlocked.delete(key); return json(res, 200, { ok: true }); }
