@@ -157,7 +157,8 @@ export class Portraits {
           writeFileSync(this.file(id) + ".style", style);
           return;
         }
-        if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === "SAFETY") why = "The picture service would not use one of these photos. Try different photos.";
+        if (r.status === 402 || r.status === 429 || r.status === 403) why = "The picture service is not taking requests right now, so no new pictures were made. This is on Vincent's side, not yours. Please try again later.";
+        else if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === "SAFETY") why = "The picture service would not use one of these photos. Try different photos.";
         console.log(`[portraits] ${model} gave no picture (${r.status} ${j.error?.message?.slice(0, 120) ?? j.candidates?.[0]?.finishReason ?? ""})`);
       } catch (e) { console.log(`[portraits] ${model}: ${(e as Error).message}`); }
     }
