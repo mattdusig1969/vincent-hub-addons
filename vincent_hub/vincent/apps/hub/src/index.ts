@@ -18,6 +18,7 @@
  *   GET  /api/rooms/:id/photo
  *   GET  /api/media/:id/sources      a player's favourites, playlists and inputs
  *   POST /api/media/:id/play         {kind, id} play one of them
+ *   POST /api/media/:id/group        {members} the players that play together with this one
  *   GET  /api/media/:id/siriusxm     the SiriusXM channel guide
  *   GET  /api/spotify                is Spotify connected; POST /api/spotify/link starts the one-time sign-in
  *   GET  /api/spotify/browse?id=     Spotify's own lists; /api/spotify/search?q=
@@ -182,7 +183,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
-  const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm)$/.exec(path);
+  const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm|group)$/.exec(path);
+  if (med && m === "POST" && med[2] === "group") { await media.group(med[1], (await body(req)).members); return json(res, 200, { ok: true }); }
   if (med && m === "GET" && med[2] === "siriusxm") return json(res, 200, { groups: await media.siriusxm(med[1]) });
   if (med && m === "GET" && med[2] === "sources") return json(res, 200, await media.sources(med[1]));
   if (med && m === "POST" && med[2] === "play") { await media.play(med[1], await body(req)); return json(res, 200, { ok: true }); }

@@ -41,6 +41,8 @@ interface Snapshot {
   devices: Device[];
   /** control id -> entity id + the device that owns it */
   controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string }>;
+  /** entity id -> control id, for naming the other players in a group */
+  byEntity: Map<string, string>;
   /** device id -> waiting flow */
   flows: Map<string, { flowId: string; handler: string }>;
 }
@@ -67,7 +69,7 @@ export class Devices {
       d.rooms = store.roomsOf(d.id, entryIds);
       d.controls = d.controls.map((c) => {
         const ref = this.snap!.controls.get(c.id)!;
-        return project(c.id, c.name, ref.domain, this.ha.states.get(ref.entityId), ref.integration);
+        return project(c.id, c.name, ref.domain, this.ha.states.get(ref.entityId), ref.integration, this.snap!.byEntity);
       });
     }
     return this.snap;
@@ -87,7 +89,7 @@ export class Devices {
     ]);
     const entryDomain = new Map<string, string>(entries.map((e: any) => [e.entry_id, e.domain]));
     const areaName = new Map<string, string>(areas.map((a: any) => [a.area_id, a.name]));
-    const snap: Snapshot = { devices: [], controls: new Map(), flows: new Map() };
+    const snap: Snapshot = { devices: [], controls: new Map(), byEntity: new Map(), flows: new Map() };
     this.entriesOf.clear();
 
     for (const d of devs) {
@@ -105,7 +107,8 @@ export class Devices {
         // The device's own address (a Sonos speaker answers there), never pinned: Home Assistant keeps it current.
         const host = typeof d.configuration_url === "string" ? /\/\/([^:/]+)/.exec(d.configuration_url)?.[1] : undefined;
         snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host });
-        controls.push(project(e.id, name, domain, undefined, integration));
+        snap.byEntity.set(e.entity_id, e.id);
+        controls.push(project(e.id, name, domain, undefined, integration, snap.byEntity));
       }
       if (!controls.length) continue; // nothing the app could do with it
       const entryIds = d.config_entries as string[];
@@ -235,7 +238,7 @@ export class Devices {
   }
 }
 
-function project(id: string, name: string, domain: string, s: HaState | undefined, integration: string): Control {
+function project(id: string, name: string, domain: string, s: HaState | undefined, integration: string, byEntity: Map<string, string>): Control {
   const a = s?.attributes ?? {};
   const base = { id, name, available: !!s && s.state !== "unavailable" && s.state !== "unknown", changed: s?.last_changed };
   switch (KIND[domain].kind) {
@@ -253,6 +256,8 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
         volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined,
         art: a.entity_picture ? `/api/art/${id}?v=${hash(String(a.entity_picture))}` : undefined,
         source: typeof a.source === "string" ? a.source : undefined, inputs, library: sonos ? "sonos" : "none",
+        group: (Array.isArray(a.group_members) && a.group_members.length ? (a.group_members as string[]).map((e) => byEntity.get(e)).filter((x): x is string => !!x) : [id]),
+        groups: sonos,
       };
     }
     case "climate": return { ...base, kind: "climate", current: a.current_temperature, target: a.temperature, mode: s?.state ?? "off" };

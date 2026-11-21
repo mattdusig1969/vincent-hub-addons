@@ -65,6 +65,10 @@ export type Control =
       art?: string;
       /** The input in use ("TV", "Line-in") and the ones it can switch to. */
       source?: string; inputs: string[];
+      /** The players playing together with this one, itself included, the leader first (control ids). One entry = playing alone. */
+      group: string[];
+      /** True when it can play together with other speakers of its kind. */
+      groups: boolean;
       /** "sonos" = the hub can list this speaker's favourites and playlists. */
       library: "sonos" | "none";
     })

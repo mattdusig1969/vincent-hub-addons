@@ -259,6 +259,27 @@ export class Media {
     }
   }
 
+  /**
+   * Makes the group this player plays in exactly `members` (control ids; the player itself always stays).
+   * Speakers joining pick up what the group is playing; speakers leaving go quiet on their own.
+   */
+  async group(controlId: string, members: unknown): Promise<void> {
+    const p = await this.devices.player(controlId);
+    if (p.integration !== "sonos") throw new Error("That player cannot play together with others.");
+    const wanted = new Set<string>([p.entityId]);
+    for (const id of Array.isArray(members) ? members.map(String) : []) {
+      const m = await this.devices.player(id);
+      if (m.integration !== p.integration) throw new Error("Only speakers of the same kind can play together.");
+      wanted.add(m.entityId);
+    }
+    const now = (this.ha.states.get(p.entityId)?.attributes?.group_members as string[] | undefined) ?? [p.entityId];
+    // Whoever leads the group today keeps leading, unless it is being let go; then this player leads.
+    const leader = wanted.has(now[0]) ? now[0] : p.entityId;
+    for (const e of now) if (!wanted.has(e)) await this.ha.service("media_player", "unjoin", e);
+    const joining = [...wanted].filter((e) => e !== leader && !(now.includes(e) && now[0] === leader));
+    if (joining.length) await this.ha.service("media_player", "join", leader, { group_members: joining });
+  }
+
   /** The cover art of what a player is playing. */
   async art(controlId: string): Promise<{ type: string; data: Buffer }> {
     const p = await this.devices.player(controlId);
