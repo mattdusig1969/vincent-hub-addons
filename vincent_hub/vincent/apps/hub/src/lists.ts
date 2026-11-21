@@ -60,10 +60,15 @@ export class Lists {
 
   /** The lists every home starts with. Skips one the home already has under a similar name. */
   async seed(names: string[]): Promise<void> {
-    const have = this.all().map((l) => l.name.toLowerCase().replace(/[^a-z]/g, ""));
+    const flat = (x: string) => x.toLowerCase().replace(/[^a-z]/g, "");
     for (const name of names) {
-      const key = name.toLowerCase().replace(/[^a-z]/g, "");
-      if (have.some((h) => h === key || h === `${key}list`)) continue;
+      const key = flat(name);
+      const match = this.entities().find((e) => { const h = flat(String(this.ha.states.get(e)?.attributes.friendly_name ?? "")); return h === key || h === `${key}list`; });
+      if (match) {
+        // The hub's own "Shopping list" becomes plain "Shopping".
+        if (String(this.ha.states.get(match)?.attributes.friendly_name) !== name) await this.ha.call({ type: "config/entity_registry/update", entity_id: match, name }).catch(() => {});
+        continue;
+      }
       await this.create(name).catch((e: Error) => console.log(`[lists] could not make "${name}": ${e.message}`));
     }
   }
