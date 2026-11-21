@@ -240,10 +240,22 @@ export const STYLES = [
   { id: "contemporary", name: "Contemporary", note: "Rounded, no outlines" },
 ] as const;
 
-/** The home's concierge. Each has five voices per accent; the names are the voice maker's. */
+/** The home's concierge. Each has five voices per accent, named for their manner; `id` is the voice maker's own name. */
 export const CHARACTERS = [
-  { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", voices: ["Enceladus", "Charon", "Fenrir", "Orus", "Puck"], locale: "en-GB" },
-  { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", voices: ["Leda", "Kore", "Aoede", "Zephyr", "Sulafat"], locale: "en-US" },
+  { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", locale: "en-GB", voices: [
+    { id: "Enceladus", name: "Hushed and unhurried", note: "Never once raised his voice" },
+    { id: "Charon", name: "Calm and knowing", note: "Has an answer, and the patience to give it" },
+    { id: "Orus", name: "Firm, but friendly", note: "Runs a tight house, kindly" },
+    { id: "Puck", name: "Bright and upbeat", note: "A spring in his step" },
+    { id: "Fenrir", name: "Eager and exuberant", note: "Delighted you asked" },
+  ] },
+  { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", locale: "en-US", voices: [
+    { id: "Leda", name: "Fresh and light", note: "Quick with a smile" },
+    { id: "Sulafat", name: "Warm and reassuring", note: "The host everyone remembers" },
+    { id: "Kore", name: "Firm, but fair", note: "Consider it handled" },
+    { id: "Aoede", name: "Breezy and relaxed", note: "Nothing is ever a problem" },
+    { id: "Zephyr", name: "Bright and sparkling", note: "A morning person, all day" },
+  ] },
 ] as const;
 
 export const VOICE_LANGUAGES = [
@@ -258,5 +270,5 @@ export interface VoiceChoice { locale: string; voice: string }
 /** What a character sounds like when the home has not chosen. */
 export function defaultVoice(character: string): VoiceChoice {
   const c = CHARACTERS.find((x) => x.id === character) ?? CHARACTERS[0];
-  return { locale: c.locale, voice: c.voices[0] };
+  return { locale: c.locale, voice: c.voices[0].id };
 }

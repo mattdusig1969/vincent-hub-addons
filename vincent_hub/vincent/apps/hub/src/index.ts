@@ -316,7 +316,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (b.voice && typeof b.voice === "object") {
       const who = CHARACTERS.find((c) => c.id === b.voice.character);
       const locale = String(b.voice.locale ?? ""), voice = String(b.voice.voice ?? "");
-      if (who && VOICE_LANGUAGES.some((l) => l.accents.some((a) => a.id === locale)) && (who.voices as readonly string[]).includes(voice)) store.setVoice(who.id, { locale, voice });
+      if (who && VOICE_LANGUAGES.some((l) => l.accents.some((a) => a.id === locale)) && who.voices.some((v) => v.id === voice)) store.setVoice(who.id, { locale, voice });
     }
     roomIds(b); // rooms named during home setup
     if (typeof b.contact === "string" && b.contact.trim()) store.setContact(b.contact);
