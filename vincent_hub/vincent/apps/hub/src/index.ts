@@ -36,7 +36,8 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { extname, join, normalize } from "node:path";
 import { HA } from "./ha.ts";
@@ -120,7 +121,20 @@ const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 
 /** Settings (adding, ignoring, removing, rooms) need the admin PIN. A correct PIN opens them on that device for a while. */
 const UNLOCK_MS = 10 * 60_000;
-const unlocked = new Map<string, number>();
+/**
+ * Which devices have settings open, and until when. Kept on disk as well, so an update or a
+ * restart of the hub service does not ask for the PIN again; using settings keeps them open.
+ */
+const unlockFile = join(dataDir, "unlocked.json");
+const unlockId = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 24);
+const unlockTimes = new Map<string, number>();
+try { for (const [k, t] of Object.entries(JSON.parse(readFileSync(unlockFile, "utf8")) as Record<string, number>)) if (t > Date.now()) unlockTimes.set(k, t); } catch { /* none kept */ }
+const keepUnlocks = () => { try { writeFileSync(unlockFile, JSON.stringify(Object.fromEntries([...unlockTimes].filter(([, t]) => t > Date.now())))); } catch { /* next time */ } };
+const unlocked = {
+  get: (key: string) => unlockTimes.get(unlockId(key)),
+  set: (key: string, until: number) => { unlockTimes.set(unlockId(key), until); keepUnlocks(); },
+  delete: (key: string) => { unlockTimes.delete(unlockId(key)); keepUnlocks(); },
+};
 const isUnlocked = (key: string) => (unlocked.get(key) ?? 0) > Date.now();
 
 /** Wrong PINs: after five in a row, a minute's wait for everyone. */
@@ -276,6 +290,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Settings: the PIN first.
   if (m !== "POST") return json(res, 404, { error: "not found" });
   if (!isUnlocked(key)) return json(res, 403, { code: "pin", error: "The admin PIN is needed for that." });
+  // Still working in settings: the ten minutes start again, at most once a minute on disk.
+  if ((unlocked.get(key) ?? 0) - Date.now() < UNLOCK_MS - 60_000) unlocked.set(key, Date.now() + UNLOCK_MS);
   const done = () => { changed(); return json(res, 200, { ok: true }); };
   /** Room ids for a list of room ids and/or new room names. */
   const roomIds = (b: any): string[] => [
