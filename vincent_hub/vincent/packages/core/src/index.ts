@@ -180,8 +180,53 @@ export interface SetupRequest {
   ha?: { username: string; password: string };
 }
 
+/** A brand the household can add by name, for devices the hub cannot find by listening. */
+export interface Brand {
+  id: string;
+  name: string;
+  category: Category;
+  /** search = the hub goes looking · steps = the maker asks for something · matter = added by Matter code · link = needs the maker's website (not yet) · none = the maker gives no way in */
+  how: "search" | "steps" | "matter" | "link" | "none";
+  /** What to check first. Shown before starting, and again if nothing is found. */
+  tips: string;
+  /** "matter" when a Matter code is another way to add this brand. */
+  also?: string;
+}
+
+/** One question from a maker while a device is being added. */
+export interface StepField {
+  name: string;
+  label: string;
+  help?: string;
+  /** code = a short number shown on the device or sent to the owner */
+  type: "text" | "password" | "number" | "code" | "toggle" | "choice";
+  required: boolean;
+  value?: string | number | boolean;
+  options?: { value: string; label: string }[];
+}
+
+/**
+ * Where adding a device stands:
+ *  form    — the maker asks something; answer `fields`
+ *  wait    — the maker is waiting on the device (a button press, a search); ask again shortly
+ *  done    — added
+ *  stopped — not added; `text` says why
+ */
+export interface Step {
+  kind: "form" | "wait" | "done" | "stopped";
+  /** Names the setup under way, for the next answer. Absent once it has ended. */
+  flow?: string;
+  title: string;
+  text: string;
+  fields: StepField[];
+  errors?: Record<string, string>;
+  message?: string;
+}
+
 export interface AddResult {
   ok: boolean;
+  /** Set when the maker asks for more before the device can be added: the first question. */
+  step?: Step;
   /** Set when the device could not be added in one step. */
   needs?: Needs;
   message?: string;

@@ -157,21 +157,17 @@ export class Devices {
     const flow = snap.flows.get(id);
     if (!flow) { store.set(id, "added"); store.setRooms(id, rooms); return { ok: true }; }
 
-    if (dev.needs === "login")
-      return { ok: false, needs: "login", message: `${dev.maker} asks for a sign-in or a pairing code. That step is coming soon.` };
-
-    // A plain confirmation: answer the waiting question with a yes.
-    let r: any;
-    try { r = await this.ha.rest("POST", `/config/config_entries/flow/${flow.flowId}`, {}); }
-    catch (e) { return { ok: false, needs: "login", message: `${dev.maker} needs more than a yes. That step is coming soon.` }; }
-    if (r?.type === "create_entry" && r.result?.entry_id) {
-      store.addEntry(r.result.entry_id); // every device this brings is added, in the chosen rooms
-      store.setEntryRooms(r.result.entry_id, rooms);
-      this.invalidate();
-      return { ok: true };
-    }
-    return { ok: false, needs: "login", message: `${dev.maker} needs more than a yes. That step is coming soon.` };
+    // Something the hub found that waits for an answer: a plain yes, or whatever its maker asks for.
+    if (!this.steps) return { ok: false, message: `${dev.maker} needs a step Vincent cannot do yet.` };
+    const step = await this.steps(flow.flowId, flow.handler, rooms);
+    this.invalidate();
+    if (step.kind === "done") return { ok: true };
+    if (step.kind === "stopped") return { ok: false, message: step.text };
+    return { ok: false, step };
   }
+
+  /** Set by the hub service: walks a waiting discovery through its maker's questions. */
+  steps?: (flowId: string, handler: string, rooms: string[]) => Promise<import("../../../packages/core/src/index.ts").Step>;
 
   async setRooms(id: string, rooms: string[]): Promise<void> {
     if (!(await this.snapshot()).devices.some((d) => d.id === id)) throw new Error("That device is no longer on the network.");

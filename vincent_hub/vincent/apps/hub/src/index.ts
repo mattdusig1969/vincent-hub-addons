@@ -27,6 +27,9 @@
  *   GET  /api/art/:id                cover art of what a player is playing
  *   GET  /api/software               the hub software's version; POST /api/software/update brings the newest
  *   GET  /api/lists/:id              a list's items; POST {op: add|done|reopen|remove|clear, text, item}; POST /api/lists {name} makes one
+ *   GET  /api/brands                 brands that can be added by name
+ *   POST /api/adding {brand, rooms}  start adding one -> a Step; POST /api/adding/:flow/answer|poll|cancel
+ *   POST /api/matter {code}          add a device by its Matter code
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
  *
  * Serves the built app too, when apps/app/dist exists.
@@ -41,6 +44,8 @@ import { Devices } from "./devices.ts";
 import { Media, radio, thumb } from "./media.ts";
 import { Place } from "./place.ts";
 import { Lists } from "./lists.ts";
+import { Flows } from "./flows.ts";
+import { brandList } from "./brands.ts";
 import { store } from "./store.ts";
 import { THEMES, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
@@ -50,6 +55,12 @@ const devices = new Devices(ha);
 const media = new Media(ha, devices);
 const place = new Place(ha);
 const lists = new Lists(ha);
+const flows = new Flows(ha, devices);
+// A found device with nothing to ask is answered with a plain yes; anything more goes to the app as a question.
+devices.steps = async (flowId, handler, rooms) => {
+  const first = await flows.startFound(flowId, handler, rooms);
+  return first.kind === "form" && first.flow && !first.fields.some((f) => f.required) && first.fields.length === 0 ? flows.answer(first.flow, {}) : first;
+};
 
 /** On the hub, Vincent runs as an add-on and can ask the hub's supervisor about its own software. */
 async function supervisor(method: string, path: string, timeout = 20_000): Promise<any> {
@@ -59,6 +70,16 @@ async function supervisor(method: string, path: string, timeout = 20_000): Promi
   const j = (await r.json().catch(() => ({}))) as any;
   if (!r.ok || j.result === "error") throw new Error(j.message ?? `the hub answered ${r.status}`);
   return j.data ?? {};
+}
+/** How the last "add by Matter code" went. */
+let matter: { state: "idle" | "working" | "done" | "failed"; message: string } = { state: "idle", message: "" };
+
+/** Why a Matter code did not work, in plain words. */
+function matterWhy(m: string): string {
+  if (/No commissionable device/i.test(m)) return "No device answered that code. It must be switched on and on your Wi-Fi, and the code freshly made in its maker's app (codes last a few minutes).";
+  if (/unknown command|not loaded|not found/i.test(m)) return "Matter is not ready on this hub yet.";
+  if (/timeout|did not answer/i.test(m)) return "The device did not answer. It must be switched on, on your Wi-Fi, and its code freshly made in the maker's app.";
+  return "That code was not accepted. Codes last only a few minutes: make a new one in the maker's app and try again.";
 }
 async function software(): Promise<Software> {
   try {
@@ -218,6 +239,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     res.end(pic.data);
     return;
   }
+  if (m === "GET" && path === "/api/matter") return json(res, 200, matter);
+  if (m === "GET" && path === "/api/brands") return json(res, 200, { brands: brandList() });
   if (m === "GET" && path === "/api/software") return json(res, 200, await software());
   const photo = /^\/api\/rooms\/([a-f0-9]+)\/photo$/.exec(path);
   if (m === "GET" && photo) {
@@ -250,6 +273,27 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     // The update stops this service and starts the new one; nothing after this line is certain to run.
     ha.service("update", "install", entity).catch((e: Error) => console.log(`[hub] update failed: ${e.message}`));
     return;
+  }
+  // Adding by brand, and answering what a maker asks.
+  if (path === "/api/adding") { const b = await body(req); const step = await flows.startBrand(String(b.brand ?? ""), roomIds(b)); changed(); return json(res, 200, step); }
+  const adding = /^\/api\/adding\/([A-Za-z0-9]+)\/(answer|poll|cancel)$/.exec(path);
+  if (adding) {
+    if (adding[2] === "cancel") { await flows.cancel(adding[1]); return done(); }
+    const step = adding[2] === "poll" ? await flows.poll(adding[1]) : await flows.answer(adding[1], (await body(req)).values ?? {});
+    if (step.kind === "done") changed();
+    return json(res, 200, step);
+  }
+  if (path === "/api/matter") {
+    const code = String((await body(req)).code ?? "").replace(/[\s-]/g, "");
+    if (!/^(\d{11}|\d{21}|MT:[A-Z0-9.\-]+)$/i.test(code)) return json(res, 200, { state: "failed", message: "A Matter code is 11 or 21 digits, or the text of its QR code starting with MT:." });
+    if (matter.state === "working") return json(res, 200, matter);
+    // Looking for the device can take a few minutes, so the app is answered at once and asks how it went.
+    matter = { state: "working", message: "Looking for the device. This can take a couple of minutes." };
+    ha.call({ type: "matter/commission", code, network_only: true }, 240_000)
+      .then(() => { matter = { state: "done", message: "Added to your hub. It appears under Add a device in a moment." }; devices.invalidate(); })
+      .catch((e: Error) => { matter = { state: "failed", message: matterWhy(e.message) }; })
+      .finally(changed);
+    return json(res, 200, matter);
   }
   if (path === "/api/spotify/link") return json(res, 200, await media.spotifyLink(changed));
   if (path === "/api/spotify/forget") { await media.spotifyForget(); return done(); }

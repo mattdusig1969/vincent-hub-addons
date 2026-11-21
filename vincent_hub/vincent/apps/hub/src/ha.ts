@@ -112,14 +112,14 @@ export class HA {
     await this.call({ type: "subscribe_events", event_type: eventType });
   }
 
-  call(msg: Record<string, unknown>): Promise<any> {
+  call(msg: Record<string, unknown>, timeoutMs = 30000): Promise<any> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("hub not connected"));
     const id = this.nextId++;
     return new Promise((ok, fail) => {
       this.waiting.set(id, { ok, fail });
       ws.send(JSON.stringify({ ...msg, id }));
-      setTimeout(() => { if (this.waiting.delete(id)) fail(new Error("hub did not answer in time")); }, 30000);
+      setTimeout(() => { if (this.waiting.delete(id)) fail(new Error("hub did not answer in time")); }, timeoutMs);
     });
   }
 
@@ -140,6 +140,20 @@ export class HA {
   async has(domain: string): Promise<boolean> {
     const entries = (await this.call({ type: "config_entries/get" })) as { domain: string }[];
     return entries.some((e) => e.domain === domain);
+  }
+
+  /** Like `rest`, for answers that are meaningful even when Home Assistant says no (a refused form comes back as a 400 with reasons). */
+  async restRaw(method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
+    const r = await fetch(this.t.rest + path, {
+      method,
+      headers: { Authorization: `Bearer ${await this.t.token()}`, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000),
+    });
+    const text = await r.text();
+    let parsed: any = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = { message: text.slice(0, 200) }; }
+    return { status: r.status, body: parsed };
   }
 
   async rest(method: string, path: string, body?: unknown): Promise<any> {
