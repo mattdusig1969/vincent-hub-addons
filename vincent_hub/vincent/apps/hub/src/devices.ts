@@ -40,7 +40,7 @@ const DISCOVERED = new Set(["zeroconf", "ssdp", "dhcp", "homekit", "bluetooth", 
 interface Snapshot {
   devices: Device[];
   /** control id -> entity id + the device that owns it */
-  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string }>;
+  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; name?: string }>;
   /** entity id -> control id, for naming the other players in a group */
   byEntity: Map<string, string>;
   /** device id -> waiting flow */
@@ -67,9 +67,12 @@ export class Devices {
       const entryIds = this.entriesOf.get(d.id) ?? [];
       d.status = store.status(d.id, entryIds);
       d.rooms = store.roomsOf(d.id, entryIds);
+      d.name = store.nameOf(d.id) || d.makerName;
       d.controls = d.controls.map((c) => {
         const ref = this.snap!.controls.get(c.id)!;
-        return project(c.id, c.name, ref.domain, this.ha.states.get(ref.entityId), ref.integration, this.snap!.byEntity);
+        // A control named after its device follows the household's name for that device.
+        const own = ref.name ?? (ref.name = c.name);
+        return project(c.id, own === d.makerName ? d.name : own, ref.domain, this.ha.states.get(ref.entityId), ref.integration, this.snap!.byEntity);
       });
     }
     return this.snap;
@@ -116,6 +119,7 @@ export class Devices {
       snap.devices.push({
         id: d.id,
         name: d.name_by_user || d.name || d.model || "Unnamed device",
+        makerName: d.name_by_user || d.name || d.model || "Unnamed device",
         maker: d.manufacturer || titled(integration),
         model: d.model || "",
         category: best!.category,
@@ -135,6 +139,7 @@ export class Devices {
       snap.devices.push({
         id,
         name: f.context?.title_placeholders?.name || titled(f.handler),
+        makerName: f.context?.title_placeholders?.name || titled(f.handler),
         maker: titled(f.handler),
         model: "",
         category: BY_INTEGRATION[f.handler] ?? "other",
@@ -172,6 +177,11 @@ export class Devices {
   async setRooms(id: string, rooms: string[]): Promise<void> {
     if (!(await this.snapshot()).devices.some((d) => d.id === id)) throw new Error("That device is no longer on the network.");
     store.setRooms(id, rooms);
+  }
+
+  async rename(id: string, name: string): Promise<void> {
+    if (!(await this.snapshot()).devices.some((d) => d.id === id)) throw new Error("That device is no longer on the network.");
+    store.setName(id, name);
   }
 
   async setStatus(id: string, status: "found" | "ignored"): Promise<void> {

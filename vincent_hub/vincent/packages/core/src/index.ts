@@ -33,7 +33,10 @@ export type Needs = "ready" | "confirm" | "login";
 
 export interface Device {
   id: string;
+  /** What the household calls it. Their own name when they gave one, else the maker's. */
   name: string;
+  /** What the device calls itself. Never changed by Vincent. */
+  makerName: string;
   maker: string;
   model: string;
   category: Category;

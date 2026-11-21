@@ -368,10 +368,11 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     }
     return done();
   }
-  const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore|rooms)$/.exec(path);
+  const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore|rooms|rename)$/.exec(path);
   if (act) {
     const id = decodeURIComponent(act[1]);
     if (act[2] === "add") { const r = await devices.add(id, roomIds(await body(req))); changed(); return json(res, 200, r); }
+    if (act[2] === "rename") { await devices.rename(id, String((await body(req)).name ?? "")); return done(); }
     if (act[2] === "rooms") { await devices.setRooms(id, roomIds(await body(req))); return done(); }
     await devices.setStatus(id, act[2] === "ignore" ? "ignored" : "found");
     return done();

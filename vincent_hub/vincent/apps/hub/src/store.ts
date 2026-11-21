@@ -27,6 +27,8 @@ interface Saved {
   rooms?: { id: string; name: string; photoAt?: number }[];
   /** device id -> room ids */
   deviceRooms?: Record<string, string[]>;
+  /** device id -> the household's own name for it. The device itself keeps its name. */
+  deviceNames?: Record<string, string>;
   /** For a device that was waiting for a yes: the rooms chosen for whatever it brings. */
   entryRooms?: Record<string, string[]>;
   theme?: string;
@@ -139,6 +141,8 @@ export const store = {
     const own = saved.deviceRooms?.[id] ?? entryIds.flatMap((e) => saved.entryRooms?.[e] ?? []);
     return [...new Set(own)].filter((r) => known.has(r));
   },
+  nameOf(id: string): string { return saved.deviceNames?.[id] ?? ""; },
+  setName(id: string, name: string): void { const n = name.trim().slice(0, 40); saved.deviceNames ??= {}; if (n) saved.deviceNames[id] = n; else delete saved.deviceNames[id]; save(); },
   setRooms(id: string, rooms: string[]): void { (saved.deviceRooms ??= {})[id] = rooms; save(); },
   setEntryRooms(entryId: string, rooms: string[]): void { (saved.entryRooms ??= {})[entryId] = rooms; save(); },
   get homeName(): string { return saved.homeName ?? ""; },
