@@ -9,13 +9,17 @@
  * Internet radio: the public Radio Browser directory. No account, no key.
  */
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type { HA } from "./ha.ts";
 import type { Devices } from "./devices.ts";
-import type { MediaItem, MediaSources } from "../../../packages/core/src/index.ts";
+import { browseRaw, playServiceStream, serviceTemplate, speakerContext, unescapeXml } from "./sonos.ts";
+import { SmapiService, type SmapiItem } from "./smapi.ts";
+import { lineupGroups, SxmLineup } from "./sxm.ts";
+import { dir } from "./store.ts";
+import type { MediaGroup, MediaItem, MediaSources, ServiceStatus } from "../../../packages/core/src/index.ts";
 
-interface SonosEntry { id: string; title: string; service: string; art?: string }
-
-const unescapeXml = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+/** Sonos's own numbers for the services Vincent knows how to show. */
+const SIRIUSXM = 37, SPOTIFY = 12;
 
 /**
  * Pictures of things to play are fetched by the hub, not by the phone: several services
@@ -45,6 +49,7 @@ export async function thumb(token: string): Promise<{ type: string; data: Buffer
   return fetched.get(token)!;
 }
 
+interface SonosEntry { id: string; title: string; service: string; art?: string; uri?: string }
 const browsed = new Map<string, { at: number; items: SonosEntry[] }>();
 
 /** One list on a speaker: "FV:2" = favourites, "SQ:" = Sonos playlists. Cached for a minute. */
@@ -52,23 +57,13 @@ async function sonosBrowse(host: string, objectId: string): Promise<SonosEntry[]
   const cacheKey = `${host}|${objectId}`;
   const hit = browsed.get(cacheKey);
   if (hit && Date.now() - hit.at < 60_000) return hit.items;
-  const body = `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1"><ObjectID>${objectId}</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>300</RequestedCount><SortCriteria></SortCriteria></u:Browse></s:Body></s:Envelope>`;
-  const res = await fetch(`http://${host}:1400/MediaServer/ContentDirectory/Control`, {
-    method: "POST",
-    headers: { "content-type": 'text/xml; charset="utf-8"', SOAPACTION: '"urn:schemas-upnp-org:service:ContentDirectory:1#Browse"' },
-    body,
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!res.ok) throw new Error(`the speaker answered ${res.status}`);
-  const didl = unescapeXml((await res.text()).match(/<Result>([\s\S]*?)<\/Result>/)?.[1] ?? "");
   const items: SonosEntry[] = [];
-  for (const m of didl.matchAll(/<(item|container) id="([^"]+)"[^>]*>([\s\S]*?)<\/\1>/g)) {
-    const inner = m[3];
-    const pick = (tag: string) => unescapeXml(inner.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`))?.[1] ?? "").trim();
+  for (const { id, xml } of await browseRaw(host, objectId)) {
+    const pick = (tag: string) => unescapeXml(xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`))?.[1] ?? "").trim();
     const title = pick("dc:title");
     if (!title) continue;
     const art = pick("upnp:albumArtURI");
-    items.push({ id: unescapeXml(m[2]), title, service: pick("r:description") || "Sonos", art: art ? (art.startsWith("/") ? `http://${host}:1400${art}` : art) : undefined });
+    items.push({ id, title, service: pick("r:description") || "Sonos", art: art ? (art.startsWith("/") ? `http://${host}:1400${art}` : art) : undefined, uri: pick("res") || undefined });
   }
   browsed.set(cacheKey, { at: Date.now(), items });
   return items;
@@ -115,6 +110,10 @@ export class Media {
   private ha: HA;
   private devices: Devices;
   private radioReady?: { at: number; ok: boolean };
+  private lineup = new SxmLineup(join(dir, "sxm_lineup.json"));
+  private spotifyService?: SmapiService;
+  private linkTimer?: NodeJS.Timeout;
+  private browseCache = new Map<string, { at: number; items: MediaItem[] }>();
 
   constructor(ha: HA, devices: Devices) { this.ha = ha; this.devices = devices; }
 
@@ -127,7 +126,7 @@ export class Media {
   async sources(controlId: string): Promise<MediaSources> {
     const p = await this.devices.player(controlId);
     const a = this.ha.states.get(p.entityId)?.attributes ?? {};
-    const out: MediaSources = { favourites: [], playlists: [], inputs: [], radio: await this.hasRadio() };
+    const out: MediaSources = { favourites: [], playlists: [], inputs: [], radio: await this.hasRadio(), siriusxm: false, spotify: false };
     const list: string[] = Array.isArray(a.source_list) ? a.source_list : [];
 
     if (p.integration === "sonos" && p.host) {
@@ -137,13 +136,98 @@ export class Media {
       out.favourites = [...groups].map(([service, items]) => ({ service, items })).sort((x, y) => y.items.length - x.items.length);
       out.playlists = lists.map((l) => ({ kind: "playlist", id: l.title, title: l.title, art: picture(l.art) }));
       out.inputs = list.filter((x) => /^(tv|line-in)$/i.test(x)).map((x) => ({ kind: "input", id: x, title: x }));
+      // The whole SiriusXM guide plays through a saved station's link, so one saved live station is what makes it possible.
+      out.siriusxm = favs.some((f) => new RegExp(`[?&]sid=${SIRIUSXM}&`).test(f.uri ?? "") && /channel-linear/.test(f.uri ?? ""));
+      out.spotify = true;
     } else {
       out.inputs = list.map((x) => ({ kind: "input", id: x, title: x }));
     }
     return out;
   }
 
-  async play(controlId: string, item: { kind?: string; id?: string }): Promise<void> {
+  // ── SiriusXM ──
+
+  /** The channel guide, with the household's saved stations first. */
+  async siriusxm(controlId: string): Promise<MediaGroup[]> {
+    const p = await this.devices.player(controlId);
+    const channels = await this.lineup.channels();
+    const item = (c: (typeof channels)[number]): MediaItem => ({ kind: "sxm", id: c.uuid, title: c.name, subtitle: [c.number != null ? `Ch ${c.number}` : "", c.desc].filter(Boolean).join(" · "), art: picture(c.logo) });
+    const groups: MediaGroup[] = lineupGroups(channels).map((g) => ({ label: g.label, items: g.channels.map(item) }));
+    if (p.host) {
+      const saved = new Set((await sonosBrowse(p.host, "FV:2").catch(() => [])).map((f) => f.uri?.match(/channel-linear(?:%3A|:)([0-9a-f-]{36})/i)?.[1]?.toLowerCase()).filter(Boolean));
+      const mine = channels.filter((c) => saved.has(c.uuid)).map(item);
+      if (mine.length) groups.unshift({ label: "Saved", items: mine });
+    }
+    return groups;
+  }
+
+  // ── Spotify, through the household's Sonos ──
+
+  private async spotify(): Promise<SmapiService> {
+    if (this.spotifyService) return this.spotifyService;
+    const host = await this.devices.anyHost("sonos");
+    if (!host) throw new Error("A Sonos speaker is needed to reach Spotify.");
+    const ctx = await speakerContext(host);
+    const desc = ctx.services.find((s) => s.sid === SPOTIFY);
+    if (!desc) throw new Error("Spotify is not offered on this Sonos system.");
+    return (this.spotifyService = new SmapiService(desc, ctx.householdId, ctx.deviceId, join(dir, "services.json")));
+  }
+
+  async spotifyStatus(): Promise<ServiceStatus> {
+    const s = await this.spotify();
+    return { linked: s.linked, account: s.nickname, signIn: s.linked ? undefined : s.pending?.regUrl };
+  }
+
+  /** Starts the one-time sign-in and keeps asking Spotify whether it happened (the person may finish it on another device). */
+  async spotifyLink(onLinked: () => void): Promise<ServiceStatus> {
+    const s = await this.spotify();
+    if (s.linked) return this.spotifyStatus();
+    const signIn = await s.beginLink();
+    if (!this.linkTimer) {
+      const until = Date.now() + 8 * 60_000;
+      const stop = () => { clearInterval(this.linkTimer); this.linkTimer = undefined; };
+      this.linkTimer = setInterval(async () => {
+        try {
+          if (s.linked || !s.pending || Date.now() > until) return stop();
+          if (await s.completeLink()) { console.log("[media] Spotify linked"); stop(); onLinked(); }
+        } catch (e) { console.log(`[media] Spotify sign-in ended: ${(e as Error).message}`); stop(); onLinked(); }
+      }, 5000);
+    }
+    return { linked: false, account: "", signIn };
+  }
+
+  async spotifyForget(): Promise<void> { (await this.spotify()).forget(); this.browseCache.clear(); }
+
+  private spotifyItem(it: SmapiItem): MediaItem {
+    // What a Sonos will play from Spotify as a whole: songs, albums, playlists. An artist can only be opened.
+    const playable = /^spotify:(track|album|playlist|episode|show)/.test(it.id);
+    return { kind: "spotify", id: it.id, title: it.title, subtitle: it.summary, art: picture(it.art), opens: it.collection, plays: playable };
+  }
+
+  async spotifyBrowse(id: string): Promise<MediaItem[]> {
+    const hit = this.browseCache.get(id);
+    if (hit && Date.now() - hit.at < 5 * 60_000) return hit.items;
+    const s = await this.spotify();
+    if (!s.linked) throw new Error("Spotify is not connected yet.");
+    const items = (await s.browse(id || "root")).filter((it) => it.id && it.title).map((it) => this.spotifyItem(it));
+    this.browseCache.set(id, { at: Date.now(), items });
+    return items;
+  }
+
+  async spotifySearch(q: string): Promise<MediaGroup[]> {
+    const s = await this.spotify();
+    if (!s.linked) throw new Error("Spotify is not connected yet.");
+    const cats = Object.entries(await s.searchCategories());
+    const groups = await Promise.all(cats.slice(0, 5).map(async ([name, id]): Promise<MediaGroup> => ({
+      label: name.replace(/^\w/, (c) => c.toUpperCase()),
+      items: (await s.search(id, q).catch(() => [])).filter((it) => it.id && it.title).map((it) => this.spotifyItem(it)),
+    })));
+    return groups.filter((g) => g.items.length);
+  }
+
+  // ── playing ──
+
+  async play(controlId: string, item: { kind?: string; id?: string; title?: string }): Promise<void> {
     const p = await this.devices.player(controlId);
     const id = String(item.id ?? "");
     if (!id) throw new Error("Nothing was chosen to play.");
@@ -156,6 +240,21 @@ export class Media {
         await play(streamType.get(id) ?? "audio/mpeg", `media-source://radio_browser/${id}`);
         break;
       case "input": await this.ha.service("media_player", "select_source", p.entityId, { source: id }); break;
+      case "spotify":
+        if (!/^spotify:(track|album|playlist|episode|show):[A-Za-z0-9]+$/.test(id)) throw new Error("A Sonos cannot play that from Spotify as a whole. Open it and choose something inside.");
+        await play("music", id);
+        break;
+      case "sxm": {
+        if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("That is not a SiriusXM channel.");
+        // A grouped speaker plays what its group's leader plays, so the leader is the one to ask.
+        const leader = (this.ha.states.get(p.entityId)?.attributes?.group_members as string[] | undefined)?.[0];
+        const host = (leader && (await this.devices.hostOf(leader))) || p.host;
+        if (!host) throw new Error("Vincent cannot reach that speaker directly.");
+        const t = await serviceTemplate(host, SIRIUSXM, /^channel-linear/);
+        if (!t) throw new Error("Save one SiriusXM station as a favourite in the Sonos app first. Vincent uses it to reach your SiriusXM.");
+        await playServiceStream(host, t, `channel-linear:${id}`, this.lineup.has(id)?.name ?? item.title ?? "SiriusXM");
+        break;
+      }
       default: throw new Error("Vincent does not know how to play that.");
     }
   }

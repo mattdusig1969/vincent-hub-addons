@@ -217,6 +217,16 @@ export class Devices {
     return ref;
   }
 
+  /** The network address of the device behind an entity, or of any device of one make. */
+  async hostOf(entityId: string): Promise<string | undefined> {
+    for (const ref of (await this.snapshot()).controls.values()) if (ref.entityId === entityId) return ref.host;
+    return undefined;
+  }
+  async anyHost(integration: string): Promise<string | undefined> {
+    for (const ref of (await this.snapshot()).controls.values()) if (ref.integration === integration && ref.host) return ref.host;
+    return undefined;
+  }
+
   /** Does this entity belong to a device the app shows? Decides whether a change is worth a push. */
   shown(entityId: string): boolean {
     if (!this.snap) return false;

@@ -82,11 +82,26 @@ export interface ControlRequest { id: string; action: Action; value?: number }
 
 /** Something a speaker can be asked to play. */
 export interface MediaItem {
-  kind: "favourite" | "playlist" | "radio" | "input";
+  kind: "favourite" | "playlist" | "radio" | "input" | "sxm" | "spotify";
   id: string;
   title: string;
   subtitle?: string;
   art?: string;
+  /** True when it holds more things (an album, a playlist, an artist) and can be opened. */
+  opens?: boolean;
+  /** False when it can only be opened, not played as a whole. */
+  plays?: boolean;
+}
+
+export interface MediaGroup { label: string; items: MediaItem[] }
+
+/** A streaming service the household signs in to once, so Vincent can show its catalogue. */
+export interface ServiceStatus {
+  linked: boolean;
+  /** The account's name, once linked. */
+  account: string;
+  /** The service's sign-in page, while a sign-in is under way. */
+  signIn?: string;
 }
 
 /** What a speaker offers. Favourites come grouped by the service they belong to ("Spotify", "SiriusXM"). */
@@ -96,6 +111,10 @@ export interface MediaSources {
   inputs: MediaItem[];
   /** False when internet radio is not available on this hub. */
   radio: boolean;
+  /** True when the household has SiriusXM (a saved SiriusXM station): the whole channel guide can be played. */
+  siriusxm: boolean;
+  /** True when this player can play Spotify through the household's Sonos. */
+  spotify: boolean;
 }
 
 /** The hub's own software. */

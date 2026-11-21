@@ -17,6 +17,9 @@
  *   GET  /api/rooms/:id/photo
  *   GET  /api/media/:id/sources      a player's favourites, playlists and inputs
  *   POST /api/media/:id/play         {kind, id} play one of them
+ *   GET  /api/media/:id/siriusxm     the SiriusXM channel guide
+ *   GET  /api/spotify                is Spotify connected; POST /api/spotify/link starts the one-time sign-in
+ *   GET  /api/spotify/browse?id=     Spotify's own lists; /api/spotify/search?q=
  *   GET  /api/radio?q=|tag=          internet radio stations
  *   GET  /api/thumb/:token           the picture of something to play (only ones the hub listed)
  *   GET  /api/art/:id                cover art of what a player is playing
@@ -160,9 +163,16 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, { devices: await devices.all(), rooms: store.rooms(), theme: store.theme, unlocked: isUnlocked(key) });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
-  const med = /^\/api\/media\/([^/]+)\/(sources|play)$/.exec(path);
+  const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm)$/.exec(path);
+  if (med && m === "GET" && med[2] === "siriusxm") return json(res, 200, { groups: await media.siriusxm(med[1]) });
   if (med && m === "GET" && med[2] === "sources") return json(res, 200, await media.sources(med[1]));
   if (med && m === "POST" && med[2] === "play") { await media.play(med[1], await body(req)); return json(res, 200, { ok: true }); }
+  if (m === "GET" && path === "/api/spotify") return json(res, 200, await media.spotifyStatus());
+  if (m === "GET" && path === "/api/spotify/browse") return json(res, 200, { items: await media.spotifyBrowse((new URL(req.url ?? "/", "http://hub").searchParams.get("id") ?? "").slice(0, 300)) });
+  if (m === "GET" && path === "/api/spotify/search") {
+    const q = (new URL(req.url ?? "/", "http://hub").searchParams.get("q") ?? "").trim().slice(0, 80);
+    return json(res, 200, { groups: q.length < 2 ? [] : await media.spotifySearch(q) });
+  }
   if (m === "GET" && path === "/api/radio") {
     const q = new URL(req.url ?? "/", "http://hub").searchParams;
     return json(res, 200, { stations: await radio((q.get("q") ?? "").trim().slice(0, 60), (q.get("tag") ?? "").trim().slice(0, 40)) });
@@ -207,11 +217,17 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     await supervisor("POST", "/store/reload", 60_000).catch(() => {});
     const info = await supervisor("GET", "/addons/self/info");
     if (!info.update_available) return json(res, 200, { ok: false, message: "Your hub already has the newest Vincent." });
+    // The hub does not let its own software replace itself, so Home Assistant is asked to do it.
+    const entity = [...ha.states.values()].find((x) => x.entity_id.startsWith("update.") && x.attributes?.title === info.name)?.entity_id;
+    if (!entity) return json(res, 200, { ok: false, message: "The hub could not find Vincent's update. Try again in a few minutes." });
+    await ha.service("homeassistant", "update_entity", entity).catch(() => {});
     json(res, 200, { ok: true, message: "Updating. Vincent will be back in a minute or two." });
     // The update stops this service and starts the new one; nothing after this line is certain to run.
-    supervisor("POST", `/store/addons/${info.slug}/update`, 600_000).catch((e: Error) => console.log(`[hub] update failed: ${e.message}`));
+    ha.service("update", "install", entity).catch((e: Error) => console.log(`[hub] update failed: ${e.message}`));
     return;
   }
+  if (path === "/api/spotify/link") return json(res, 200, await media.spotifyLink(changed));
+  if (path === "/api/spotify/forget") { await media.spotifyForget(); return done(); }
   if (path === "/api/reviewed") { store.setReviewed(); return done(); }
   if (path === "/api/home") {
     const b = await body(req);

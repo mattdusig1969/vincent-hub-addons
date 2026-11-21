@@ -32,7 +32,7 @@ interface Saved {
 }
 
 // On the hub an add-on's durable folder is /data.
-const dir = process.env.SUPERVISOR_TOKEN ? "/data" : fileURLToPath(new URL("../data", import.meta.url));
+export const dir = process.env.SUPERVISOR_TOKEN ? "/data" : fileURLToPath(new URL("../data", import.meta.url));
 const file = join(dir, "vincent.json");
 
 let saved: Saved = { devices: {}, addedEntries: [], reviewed: false };
