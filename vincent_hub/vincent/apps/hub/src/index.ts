@@ -49,7 +49,7 @@ import { dir as dataDir } from "./store.ts";
 import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
 import { store } from "./store.ts";
-import { THEMES, STYLES, CHARACTERS, VOICE_LANGUAGES, defaultVoice, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
+import { THEMES, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
@@ -212,7 +212,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
-      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => [c.id, store.voices[c.id] ?? defaultVoice(c.id)])), unlocked: isUnlocked(key),
+      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style === HOME_STYLE.id && !portraits.photos().length ? store.custom.shape : store.style, custom: store.custom, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => [c.id, store.voices[c.id] ?? defaultVoice(c.id)])), unlocked: isUnlocked(key),
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
@@ -328,7 +328,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (path === "/api/portraits/generate") {
     const b = await body(req);
     const ids = Array.isArray(b.characters) && b.characters.length ? b.characters.map(String) : CHARACTERS.map((c) => c.id);
-    portraits.start(ids, store.style);
+    portraits.start(ids, store.style === HOME_STYLE.id ? store.custom.shape : store.style);
     return done();
   }
   const preset = /^\/api\/portraits\/([a-z]+)\/reset$/.exec(path);
@@ -340,7 +340,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req);
     if (typeof b.name === "string" && b.name.trim()) store.setHomeName(b.name);
     if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) store.setTheme(b.theme);
-    if (typeof b.style === "string" && STYLES.some((t) => t.id === b.style)) store.setStyle(b.style);
+    if (typeof b.style === "string" && (STYLES.some((t) => t.id === b.style) || (b.style === HOME_STYLE.id && portraits.photos().length))) store.setStyle(b.style);
+    if (b.custom && typeof b.custom === "object") {
+      const font = FONTS.some((f) => f.id === b.custom.font) ? String(b.custom.font) : store.custom.font;
+      const shape = STYLES.some((t) => t.id === b.custom.shape) ? String(b.custom.shape) : store.custom.shape;
+      store.setCustom({ font, shape });
+    }
     if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character)) store.setCharacter(b.character);
     if (b.voice && typeof b.voice === "object") {
       const who = CHARACTERS.find((c) => c.id === b.voice.character);

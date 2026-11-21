@@ -33,6 +33,7 @@ interface Saved {
   entryRooms?: Record<string, string[]>;
   theme?: string;
   style?: string;
+  custom?: { font: string; shape: string };
   character?: string;
   /** character id -> the voice the home chose for it */
   voices?: Record<string, { locale: string; voice: string }>;
@@ -151,6 +152,8 @@ export const store = {
   setTheme(theme: string): void { saved.theme = theme; save(); },
   get style(): string { return saved.style ?? "traditional"; },
   setStyle(style: string): void { saved.style = style; save(); },
+  get custom(): { font: string; shape: string } { return saved.custom ?? { font: "serif", shape: "traditional" }; },
+  setCustom(c: { font: string; shape: string }): void { saved.custom = c; save(); },
   get character(): string { return saved.character ?? "vincent"; },
   setCharacter(c: string): void { saved.character = c; save(); },
   get voices(): Record<string, { locale: string; voice: string }> { return saved.voices ?? {}; },

@@ -294,3 +294,17 @@ export interface PortraitStatus {
   seconds: number;
   characters: Record<string, PortraitJob & { version: number }>;
 }
+
+
+/** The household's own style: their home in the pictures, their choice of lettering and shapes. Offered once they have added a photo of their home. */
+export const HOME_STYLE = { id: "home", name: "My Home", note: "Your home, your choices" } as const;
+export const FONTS = [
+  { id: "serif", name: "Bookish" },
+  { id: "clean", name: "Clean" },
+  { id: "rounded", name: "Rounded" },
+  { id: "fine", name: "Fine" },
+  { id: "chunky", name: "Chunky" },
+] as const;
+/** `shape` is one of STYLES: its corners, borders and buttons, and the characters' clothes in the pictures. */
+export interface CustomStyle { font: string; shape: string }
+export const DEFAULT_CUSTOM: CustomStyle = { font: "serif", shape: "traditional" };
