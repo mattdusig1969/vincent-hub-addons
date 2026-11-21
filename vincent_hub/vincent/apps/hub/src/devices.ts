@@ -43,6 +43,8 @@ interface Snapshot {
   controls: Map<string, { entityId: string; deviceId: string; domain: string }>;
   /** device id -> waiting flow */
   flows: Map<string, { flowId: string; handler: string }>;
+  /** room name -> Home Assistant area id */
+  rooms: Map<string, string>;
 }
 
 export class Devices {
@@ -82,7 +84,7 @@ export class Devices {
     ]);
     const entryDomain = new Map<string, string>(entries.map((e: any) => [e.entry_id, e.domain]));
     const areaName = new Map<string, string>(areas.map((a: any) => [a.area_id, a.name]));
-    const snap: Snapshot = { devices: [], controls: new Map(), flows: new Map() };
+    const snap: Snapshot = { devices: [], controls: new Map(), flows: new Map(), rooms: new Map(areas.map((a: any) => [a.name, a.area_id])) };
     this.statusOf.clear();
 
     for (const d of devs) {
@@ -159,6 +161,22 @@ export class Devices {
       return { ok: true };
     }
     return { ok: false, needs: "login", message: `${dev.maker} needs more than a yes. That step is coming soon.` };
+  }
+
+  async rooms(): Promise<string[]> { return [...(await this.snapshot()).rooms.keys()].sort((a, b) => a.localeCompare(b)); }
+
+  /** Puts a device in a room, making the room if it is new. An empty name takes it out of its room. */
+  async setRoom(id: string, room: string): Promise<void> {
+    const snap = await this.snapshot();
+    if (snap.flows.has(id) || !snap.devices.some((d) => d.id === id)) throw new Error("That device cannot be given a room yet.");
+    const name = room.trim().slice(0, 40);
+    let areaId: string | null = null;
+    if (name) {
+      const same = [...snap.rooms].find(([n]) => n.toLowerCase() === name.toLowerCase());
+      areaId = same ? same[1] : (await this.ha.call({ type: "config/area_registry/create", name })).area_id;
+    }
+    await this.ha.call({ type: "config/device_registry/update", device_id: id, area_id: areaId });
+    this.invalidate();
   }
 
   async setStatus(id: string, status: "found" | "ignored"): Promise<void> {

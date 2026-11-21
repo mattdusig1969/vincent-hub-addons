@@ -8,8 +8,10 @@
  *   POST /api/devices/:id/restore    back to found (un-add or un-ignore)
  *   POST /api/reviewed               the first device review is done
  *   POST /api/control                {id, action, value} for an added device
- *   POST /api/setup                  first-time only: owner name + admin PIN
- *   POST /api/pin                    {pin} -> is it the admin PIN
+ *   POST /api/setup                  first-time only: owner name + admin PIN -> this device's key
+ *   POST /api/pair                   {pin, name} -> a key for another phone or tablet
+ *   POST /api/unlock | /api/lock     {pin} opens settings on this device for ten minutes
+ *   POST /api/devices/:id/room       {room} put it in a room (made if new)
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
  *
  * Serves the built app too, when apps/app/dist exists.
@@ -41,9 +43,25 @@ ha.onChange = (entityId) => {
 };
 ha.start();
 
-// The app is not always served from here (the iPhone app carries its own copy), so any origin may ask.
-// TODO before real homes: a per-device pairing token; today anything on the home Wi-Fi can call this.
-const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
+// The app is not always served from here (the iPhone app carries its own copy), so any origin may ask,
+// but only a paired phone or tablet gets an answer.
+const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, Authorization", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
+
+/** Settings (adding, ignoring, removing, rooms) need the admin PIN. A correct PIN opens them on that device for a while. */
+const UNLOCK_MS = 10 * 60_000;
+const unlocked = new Map<string, number>();
+const isUnlocked = (key: string) => (unlocked.get(key) ?? 0) > Date.now();
+
+/** Wrong PINs: after five in a row, a minute's wait for everyone. */
+let misses = 0, lockedUntil = 0;
+function pinOk(pin: unknown): "ok" | "wrong" | "wait" {
+  if (Date.now() < lockedUntil) return "wait";
+  if (store.checkPin(String(pin ?? ""))) { misses = 0; return "ok"; }
+  if (++misses >= 5) { misses = 0; lockedUntil = Date.now() + 60_000; }
+  return "wrong";
+}
+const pinRefusal = (res: ServerResponse, r: "wrong" | "wait") =>
+  json(res, 403, r === "wait" ? { code: "wait", error: "Too many wrong PINs. Try again in a minute." } : { code: "wrong", error: "That is not the PIN." });
 
 const json = (res: ServerResponse, code: number, body: unknown) => {
   res.writeHead(code, { ...CORS, "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -63,6 +81,30 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const s: HubStatus = { connected: ha.connected, version: ha.version, homeName: ha.homeName, reviewed: store.reviewed, setUp: store.setUp, owner: store.owner };
     return json(res, 200, s);
   }
+  if (m === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
+
+  // First-time setup: the owner, the PIN, and the first paired device (the one doing the setup).
+  if (m === "POST" && path === "/api/setup") {
+    if (store.setUp) return json(res, 409, { error: "This hub is already set up." });
+    const b = (await body(req)) as SetupRequest;
+    if (!b.owner?.trim() || !/^\d{4,8}$/.test(b.pin ?? "")) return json(res, 400, { error: "A name and a PIN of 4 to 8 digits are needed." });
+    store.setup(b.owner.trim(), b.pin, b.ha);
+    const key = store.pair(`${b.owner.trim()}'s device`);
+    unlocked.set(key, Date.now() + UNLOCK_MS); // the first device review follows at once
+    return json(res, 200, { ok: true, key });
+  }
+  // Another phone or tablet joins the home with the PIN.
+  if (m === "POST" && path === "/api/pair") {
+    const b = await body(req);
+    const r = pinOk(b.pin);
+    if (r !== "ok") return pinRefusal(res, r);
+    return json(res, 200, { ok: true, key: store.pair(String(b.name ?? "").trim().slice(0, 40) || "A device") });
+  }
+
+  // Everything below is for paired devices only. (An event stream cannot send a header, so the key may ride in the address.)
+  const key = (req.headers.authorization ?? "").replace(/^Bearer /, "") || new URL(req.url ?? "/", "http://hub").searchParams.get("k") || "";
+  if (!store.paired(key)) return json(res, 401, { code: "pair", error: "This device has not joined this home." });
+
   if (m === "GET" && path === "/api/events") {
     res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
     res.write("event: hello\ndata: 1\n\n");
@@ -71,25 +113,27 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     req.on("close", () => { clearInterval(beat); streams.delete(res); });
     return;
   }
-  if (m === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
-  if (m === "POST" && path === "/api/setup") {
-    if (store.setUp) return json(res, 409, { error: "This hub is already set up." });
-    const b = (await body(req)) as SetupRequest;
-    if (!b.owner?.trim() || !/^\d{4,8}$/.test(b.pin ?? "")) return json(res, 400, { error: "A name and a PIN of 4 to 8 digits are needed." });
-    store.setup(b.owner.trim(), b.pin, b.ha);
+  if (m === "POST" && path === "/api/unlock") {
+    const r = pinOk((await body(req)).pin);
+    if (r !== "ok") return pinRefusal(res, r);
+    unlocked.set(key, Date.now() + UNLOCK_MS);
     return json(res, 200, { ok: true });
   }
-  if (m === "POST" && path === "/api/pin") return json(res, 200, { ok: store.checkPin(String((await body(req)).pin ?? "")) });
+  if (m === "POST" && path === "/api/lock") { unlocked.delete(key); return json(res, 200, { ok: true }); }
   if (!ha.connected) return json(res, 503, { error: "The hub is starting. Try again in a moment." });
 
-  if (m === "GET" && path === "/api/devices") return json(res, 200, { devices: await devices.all() });
-  if (m === "POST" && path === "/api/reviewed") { store.setReviewed(); return json(res, 200, { ok: true }); }
+  // Everyday use: no PIN.
+  if (m === "GET" && path === "/api/devices") return json(res, 200, { devices: await devices.all(), rooms: await devices.rooms(), unlocked: isUnlocked(key) });
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
 
-  const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore)$/.exec(path);
-  if (m === "POST" && act) {
+  // Settings: the PIN first.
+  const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore|room)$/.exec(path);
+  if (m === "POST" && (act || path === "/api/reviewed")) {
+    if (!isUnlocked(key)) return json(res, 403, { code: "pin", error: "The admin PIN is needed for that." });
+    if (!act) { store.setReviewed(); return json(res, 200, { ok: true }); }
     const id = decodeURIComponent(act[1]);
     if (act[2] === "add") { const r = await devices.add(id); changed(); return json(res, 200, r); }
+    if (act[2] === "room") { await devices.setRoom(id, String((await body(req)).room ?? "")); changed(); return json(res, 200, { ok: true }); }
     await devices.setStatus(id, act[2] === "ignore" ? "ignored" : "found");
     changed();
     return json(res, 200, { ok: true });

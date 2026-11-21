@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { ListStatus } from "../../../packages/core/src/index.ts";
 
 interface Saved {
@@ -19,6 +19,8 @@ interface Saved {
   pin?: { salt: string; hash: string };
   /** The hub's own Home Assistant login, so the household is never locked out of it. */
   ha?: { username: string; password: string };
+  /** Phones and tablets allowed to talk to this home: sha-256 of each one's key -> its name. */
+  paired?: Record<string, { name: string; since: string }>;
 }
 
 // On the hub an add-on's durable folder is /data.
@@ -64,6 +66,16 @@ export const store = {
     const got = scryptSync(pin, saved.pin.salt, 32);
     return timingSafeEqual(got, Buffer.from(saved.pin.hash, "hex"));
   },
+  /** Lets a phone or tablet in, and returns the key it must show from now on. Only the key's hash is kept. */
+  pair(name: string): string {
+    const key = randomBytes(24).toString("base64url");
+    (saved.paired ??= {})[sha(key)] = { name, since: new Date().toISOString() };
+    save();
+    return key;
+  },
+  paired(key: string): boolean { return !!key && !!saved.paired?.[sha(key)]; },
   get reviewed(): boolean { return saved.reviewed; },
   setReviewed(): void { if (!saved.reviewed) { saved.reviewed = true; save(); } },
 };
+
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
