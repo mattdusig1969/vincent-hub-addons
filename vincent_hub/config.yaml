@@ -1,10 +1,15 @@
 name: Vincent Hub
-version: "0.0.1"
+version: "0.1.0"
 slug: vincent_hub
-description: Placeholder for the Vincent hub service (install test only)
+description: The Vincent hub service. Holds the home's device list and serves the Vincent app.
 arch:
   - aarch64
   - amd64
 init: false
 startup: application
 boot: auto
+homeassistant_api: true
+ports:
+  8870/tcp: 8870
+ports_description:
+  8870/tcp: The Vincent app

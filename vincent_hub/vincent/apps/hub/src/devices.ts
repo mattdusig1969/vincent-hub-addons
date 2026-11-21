@@ -1,0 +1,223 @@
+/**
+ * Turns what Home Assistant holds into Vincent's device list, and carries commands back.
+ *
+ * Two sources make up "found":
+ *  - devices Home Assistant already set up (it adds no-login devices on its own)
+ *  - discoveries waiting for a yes (its config flows in progress)
+ */
+import type { HA, HaState } from "./ha.ts";
+import { store } from "./store.ts";
+import type { AddResult, Category, Control, ControlRequest, Device, Needs } from "../../../packages/core/src/index.ts";
+
+/** Entity kinds the app can control, and the category each one puts a device in. */
+const KIND: Record<string, { kind: Control["kind"]; category: Category; rank: number }> = {
+  camera: { kind: "camera", category: "security", rank: 1 },
+  lock: { kind: "lock", category: "security", rank: 1 },
+  climate: { kind: "climate", category: "climate", rank: 2 },
+  media_player: { kind: "media", category: "media", rank: 3 },
+  light: { kind: "light", category: "lights", rank: 4 },
+  cover: { kind: "cover", category: "other", rank: 5 },
+  switch: { kind: "switch", category: "other", rank: 6 },
+  fan: { kind: "switch", category: "other", rank: 6 },
+};
+
+/** For a discovery that has no entities yet: what kind of thing its integration brings. */
+const BY_INTEGRATION: Record<string, Category> = {
+  hue: "lights", wled: "lights", lifx: "lights", tplink: "lights", govee_light_local: "lights", nanoleaf: "lights", yeelight: "lights", lutron_caseta: "lights",
+  sonos: "media", apple_tv: "media", cast: "media", webostv: "media", samsungtv: "media", roku: "media", androidtv_remote: "media", heos: "media", denonavr: "media", bluesound: "media", yamaha_musiccast: "media",
+  ring: "security", unifiprotect: "security", onvif: "security", reolink: "security", august: "security", yale: "security", schlage: "security", axis: "security", doorbird: "security",
+  nest: "climate", ecobee: "climate", homekit_controller: "other", tado: "climate", sensibo: "climate",
+};
+
+/** Integrations whose setup asks for an account or a pairing code. Placeholder list; the real flows come later. */
+const LOGIN = new Set(["apple_tv", "nest", "ring", "ecobee", "august", "yale", "schlage", "unifiprotect", "reolink", "onvif", "tado", "sensibo", "samsungtv", "webostv", "androidtv_remote", "homekit_controller", "hue", "lutron_caseta"]);
+
+/** Found on the network but not part of running a home: printers, routers. Never offered. */
+const NOT_HOME = new Set(["ipp", "brother", "upnp", "dlna_dmr", "dlna_dms", "synology_dsm", "fritz", "thread", "otbr"]);
+
+const DISCOVERED = new Set(["zeroconf", "ssdp", "dhcp", "homekit", "bluetooth", "usb", "mqtt", "integration_discovery", "hassio"]);
+
+interface Snapshot {
+  devices: Device[];
+  /** control id -> entity id + the device that owns it */
+  controls: Map<string, { entityId: string; deviceId: string; domain: string }>;
+  /** device id -> waiting flow */
+  flows: Map<string, { flowId: string; handler: string }>;
+}
+
+export class Devices {
+  private snap?: Snapshot;
+  private at = 0;
+  private ha: HA;
+
+  constructor(ha: HA) { this.ha = ha; }
+
+  /** A registry changed: rebuild on the next read. */
+  invalidate(): void { this.at = 0; }
+
+  async all(): Promise<Device[]> { return (await this.snapshot()).devices; }
+
+  private async snapshot(): Promise<Snapshot> {
+    // The structure is cached briefly; live values are filled in fresh on every read.
+    if (!this.snap || Date.now() - this.at > 5000) { this.snap = await this.build(); this.at = Date.now(); }
+    else for (const d of this.snap.devices) d.status = this.statusOf.get(d.id)?.() ?? d.status;
+    for (const d of this.snap.devices)
+      d.controls = d.controls.map((c) => {
+        const ref = this.snap!.controls.get(c.id)!;
+        return project(c.id, c.name, ref.domain, this.ha.states.get(ref.entityId));
+      });
+    return this.snap;
+  }
+
+  private statusOf = new Map<string, () => Device["status"]>();
+
+  private async build(): Promise<Snapshot> {
+    const ha = this.ha;
+    const [devs, ents, entries, flows, areas] = await Promise.all([
+      ha.call({ type: "config/device_registry/list" }),
+      ha.call({ type: "config/entity_registry/list" }),
+      ha.call({ type: "config_entries/get" }),
+      ha.call({ type: "config_entries/flow/progress" }),
+      ha.call({ type: "config/area_registry/list" }),
+    ]);
+    const entryDomain = new Map<string, string>(entries.map((e: any) => [e.entry_id, e.domain]));
+    const areaName = new Map<string, string>(areas.map((a: any) => [a.area_id, a.name]));
+    const snap: Snapshot = { devices: [], controls: new Map(), flows: new Map() };
+    this.statusOf.clear();
+
+    for (const d of devs) {
+      if (d.entry_type === "service" || d.disabled_by) continue;
+      const mine = ents.filter((e: any) => e.device_id === d.id && !e.disabled_by && !e.hidden_by && !e.entity_category);
+      const controls: Control[] = [];
+      let best: { category: Category; rank: number } | undefined;
+      for (const e of mine) {
+        const domain = String(e.entity_id).split(".")[0];
+        const k = KIND[domain];
+        if (!k) continue;
+        if (!best || k.rank < best.rank) best = k;
+        const name = e.name || e.original_name || d.name_by_user || d.name || "";
+        snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain });
+        controls.push(project(e.id, name, domain, undefined));
+      }
+      if (!controls.length) continue; // nothing the app could do with it
+      const integration = (d.config_entries as string[]).map((id) => entryDomain.get(id)).find(Boolean) ?? "";
+      const entryIds = d.config_entries as string[];
+      this.statusOf.set(d.id, () => store.status(d.id, entryIds));
+      snap.devices.push({
+        id: d.id,
+        name: d.name_by_user || d.name || d.model || "Unnamed device",
+        maker: d.manufacturer || titled(integration),
+        model: d.model || "",
+        category: best!.category,
+        status: store.status(d.id, entryIds),
+        needs: "ready",
+        room: d.area_id ? areaName.get(d.area_id) : undefined,
+        controls,
+      });
+    }
+
+    for (const f of flows) {
+      if (!DISCOVERED.has(f.context?.source) || NOT_HOME.has(f.handler)) continue;
+      const id = `found:${f.handler}:${f.context?.unique_id ?? f.flow_id}`;
+      const needs: Needs = LOGIN.has(f.handler) ? "login" : "confirm";
+      snap.flows.set(id, { flowId: f.flow_id, handler: f.handler });
+      this.statusOf.set(id, () => store.status(id));
+      snap.devices.push({
+        id,
+        name: f.context?.title_placeholders?.name || titled(f.handler),
+        maker: titled(f.handler),
+        model: "",
+        category: BY_INTEGRATION[f.handler] ?? "other",
+        status: store.status(id),
+        needs,
+        controls: [],
+      });
+    }
+
+    snap.devices.sort((a, b) => a.name.localeCompare(b.name));
+    return snap;
+  }
+
+  /** The household chose a device. Ready ones are instant; waiting ones get their yes. */
+  async add(id: string): Promise<AddResult> {
+    const snap = await this.snapshot();
+    const dev = snap.devices.find((d) => d.id === id);
+    if (!dev) return { ok: false, message: "That device is no longer on the network." };
+    const flow = snap.flows.get(id);
+    if (!flow) { store.set(id, "added"); return { ok: true }; }
+
+    if (dev.needs === "login")
+      return { ok: false, needs: "login", message: `${dev.maker} asks for a sign-in or a pairing code. That step is coming soon.` };
+
+    // A plain confirmation: answer the waiting question with a yes.
+    let r: any;
+    try { r = await this.ha.rest("POST", `/config/config_entries/flow/${flow.flowId}`, {}); }
+    catch (e) { return { ok: false, needs: "login", message: `${dev.maker} needs more than a yes. That step is coming soon.` }; }
+    if (r?.type === "create_entry" && r.result?.entry_id) {
+      store.addEntry(r.result.entry_id); // every device this brings is added
+      this.invalidate();
+      return { ok: true };
+    }
+    return { ok: false, needs: "login", message: `${dev.maker} needs more than a yes. That step is coming soon.` };
+  }
+
+  async setStatus(id: string, status: "found" | "ignored"): Promise<void> {
+    store.set(id, status);
+  }
+
+  /** Commands only reach devices the household added. */
+  async control(req: ControlRequest): Promise<void> {
+    const snap = await this.snapshot();
+    const ref = snap.controls.get(req.id);
+    const dev = ref && snap.devices.find((d) => d.id === ref.deviceId);
+    if (!ref || !dev) throw new Error("unknown control");
+    if (dev.status !== "added") throw new Error("that device has not been added to Vincent");
+    const { domain, entityId } = ref;
+    const v = req.value;
+    const call = (service: string, data = {}, dom = domain) => this.ha.service(dom, service, entityId, data);
+    switch (req.action) {
+      case "on": await call("turn_on", {}, "homeassistant"); break;
+      case "off": await call("turn_off", {}, "homeassistant"); break;
+      case "brightness": await call("turn_on", { brightness_pct: clamp(v, 1, 100) }); break;
+      case "play": await call("media_play"); break;
+      case "pause": await call("media_pause"); break;
+      case "volume": await call("volume_set", { volume_level: clamp(v, 0, 100) / 100 }); break;
+      case "target": await call("set_temperature", { temperature: v }); break;
+      case "lock": await call("lock"); break;
+      case "unlock": await call("unlock"); break;
+      case "open": await call("open_cover"); break;
+      case "close": await call("close_cover"); break;
+      default: throw new Error("unknown action");
+    }
+  }
+
+  /** Does this entity belong to a device the app shows? Decides whether a change is worth a push. */
+  shown(entityId: string): boolean {
+    if (!this.snap) return false;
+    for (const ref of this.snap.controls.values()) if (ref.entityId === entityId) return true;
+    return false;
+  }
+}
+
+function project(id: string, name: string, domain: string, s: HaState | undefined): Control {
+  const a = s?.attributes ?? {};
+  const base = { id, name, available: !!s && s.state !== "unavailable" && s.state !== "unknown" };
+  switch (KIND[domain].kind) {
+    case "light": {
+      const modes: string[] = a.supported_color_modes ?? [];
+      return { ...base, kind: "light", on: s?.state === "on", dimmable: modes.some((m) => m !== "onoff"), brightness: a.brightness ? Math.round((a.brightness / 255) * 100) : 0 };
+    }
+    case "media": {
+      const st = s?.state === "playing" ? "playing" : s?.state === "paused" ? "paused" : s?.state === "off" ? "off" : "idle";
+      return { ...base, kind: "media", state: st, title: a.media_title, artist: a.media_artist, volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined };
+    }
+    case "climate": return { ...base, kind: "climate", current: a.current_temperature, target: a.temperature, mode: s?.state ?? "off" };
+    case "lock": return { ...base, kind: "lock", locked: s?.state === "locked" };
+    case "cover": return { ...base, kind: "cover", open: s?.state !== "closed" };
+    case "camera": return { ...base, kind: "camera" };
+    default: return { ...base, kind: "switch", on: s?.state === "on" };
+  }
+}
+
+const clamp = (v: number | undefined, lo: number, hi: number) => Math.max(lo, Math.min(hi, Number(v ?? lo)));
+const titled = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
