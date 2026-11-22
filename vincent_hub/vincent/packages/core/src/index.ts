@@ -253,10 +253,17 @@ export const VOICES = [
   { id: "Leda", sex: "Female", name: "Fresh and light", note: "Quick with a smile" },
   { id: "Sulafat", sex: "Female", name: "Warm and reassuring", note: "The host everyone remembers" },
 ] as const;
+/** Roxy is a woman, so all five of hers are women's voices. */
+const LADIES = [
+  ...VOICES.filter((v) => v.sex === "Female"),
+  { id: "Kore", sex: "Female", name: "Firm, but fair", note: "Consider it handled" },
+  { id: "Aoede", sex: "Female", name: "Breezy and relaxed", note: "Nothing is ever a problem" },
+  { id: "Zephyr", sex: "Female", name: "Bright and sparkling", note: "A morning person, all day" },
+] as const;
 /** `voice` is what the character sounds like until the home chooses otherwise. */
 export const CHARACTERS = [
   { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", locale: "en-GB", voice: "Enceladus", voices: VOICES },
-  { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", locale: "en-US", voice: "Leda", voices: VOICES },
+  { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", locale: "en-US", voice: "Leda", voices: LADIES },
   { id: "otto", name: "Otto", note: "The all-seeing machine. Curious, precise, a touch theatrical.", locale: "en-US", voice: "Charon", voices: VOICES },
   { id: "ernest", name: "Ernest", note: "The shy one in the box. Jumpy, witty, eager to help.", locale: "en-US", voice: "Fenrir", voices: VOICES },
 ] as const;
