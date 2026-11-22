@@ -14,7 +14,7 @@
  *   POST /api/unlock | /api/lock     {pin} opens settings on this device for ten minutes
  *   POST /api/devices/:id/add|rooms  {rooms, newRooms} choose it / say which rooms it is in (several allowed)
  *   POST /api/home                   {name, theme, style, character, voice, newRooms, zip, timeZone, contact} the home's name, look, first rooms, where it is, how to reach the owner
- *   POST /api/rooms, /api/rooms/:id/rename|delete|photo      rooms and their photos (photo = a JPEG body)
+ *   POST /api/rooms, /api/rooms/order, /api/rooms/:id/rename|delete|photo      rooms and their photos (photo = a JPEG body)
  *   GET  /api/rooms/:id/photo
  *   GET  /api/media/:id/sources      a player's favourites, playlists and inputs
  *   POST /api/media/:id/play         {kind, id} play one of them
@@ -383,6 +383,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return done();
   }
   if (path === "/api/rooms") { const b = await body(req); const id = store.room(String(b.name ?? "")); changed(); return json(res, 200, { ok: true, id }); }
+  if (path === "/api/rooms/order") { const b = await body(req); store.orderRooms(Array.isArray(b.ids) ? b.ids.map(String) : []); changed(); return json(res, 200, { ok: true }); }
   const room = /^\/api\/rooms\/([a-f0-9]+)\/(rename|delete|photo)$/.exec(path);
   if (room) {
     if (room[2] === "delete") store.deleteRoom(room[1]);

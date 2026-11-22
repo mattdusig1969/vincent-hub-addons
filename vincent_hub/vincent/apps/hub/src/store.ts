@@ -122,6 +122,13 @@ export const store = {
     const r = saved.rooms?.find((x) => x.id === id);
     if (r && name.trim()) { r.name = name.trim().slice(0, 40); save(); }
   },
+  /** Puts the rooms in the given order; any left out keep their place at the end. */
+  orderRooms(ids: string[]): void {
+    const list = saved.rooms ?? [];
+    const first = ids.map((id) => list.find((r) => r.id === id)).filter((r): r is NonNullable<typeof r> => !!r);
+    saved.rooms = [...new Set(first), ...list.filter((r) => !first.includes(r))];
+    save();
+  },
   deleteRoom(id: string): void {
     saved.rooms = (saved.rooms ?? []).filter((r) => r.id !== id);
     for (const map of [saved.deviceRooms ?? {}, saved.entryRooms ?? {}])
