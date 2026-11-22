@@ -245,27 +245,20 @@ export const STYLES = [
   { id: "trailer", name: "Trailer Park", note: "Loud, chunky, a good time" },
 ] as const;
 
-/** The home's concierge. Each has five voices per accent, named for their manner; `id` is the voice maker's own name. */
-const GENTLEMEN = [
-  { id: "Enceladus", name: "Hushed and unhurried", note: "Never once raised his voice" },
-  { id: "Charon", name: "Calm and knowing", note: "Has an answer, and the patience to give it" },
-  { id: "Orus", name: "Firm, but friendly", note: "Runs a tight house, kindly" },
-  { id: "Puck", name: "Bright and upbeat", note: "A spring in his step" },
-  { id: "Fenrir", name: "Eager and exuberant", note: "Delighted you asked" },
-] as const;
-const LADIES = [
-  { id: "Leda", name: "Fresh and light", note: "Quick with a smile" },
-  { id: "Sulafat", name: "Warm and reassuring", note: "The host everyone remembers" },
-  { id: "Kore", name: "Firm, but fair", note: "Consider it handled" },
-  { id: "Aoede", name: "Breezy and relaxed", note: "Nothing is ever a problem" },
-  { id: "Zephyr", name: "Bright and sparkling", note: "A morning person, all day" },
+/** The voices every character can take: three men and two women per accent, named for their manner; `id` is the voice maker's own name. */
+export const VOICES = [
+  { id: "Enceladus", sex: "Male", name: "Hushed and unhurried", note: "Never once raised his voice" },
+  { id: "Charon", sex: "Male", name: "Calm and knowing", note: "Has an answer, and the patience to give it" },
+  { id: "Fenrir", sex: "Male", name: "Eager and exuberant", note: "Delighted you asked" },
+  { id: "Leda", sex: "Female", name: "Fresh and light", note: "Quick with a smile" },
+  { id: "Sulafat", sex: "Female", name: "Warm and reassuring", note: "The host everyone remembers" },
 ] as const;
 /** `voice` is what the character sounds like until the home chooses otherwise. */
 export const CHARACTERS = [
-  { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", locale: "en-GB", voice: "Enceladus", voices: GENTLEMEN },
-  { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", locale: "en-US", voice: "Leda", voices: LADIES },
-  { id: "otto", name: "Otto", note: "The all-seeing machine. Curious, precise, a touch theatrical.", locale: "en-US", voice: "Charon", voices: GENTLEMEN },
-  { id: "ernest", name: "Ernest", note: "The shy one in the box. Jumpy, witty, eager to help.", locale: "en-US", voice: "Fenrir", voices: GENTLEMEN },
+  { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", locale: "en-GB", voice: "Enceladus", voices: VOICES },
+  { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", locale: "en-US", voice: "Leda", voices: VOICES },
+  { id: "otto", name: "Otto", note: "The all-seeing machine. Curious, precise, a touch theatrical.", locale: "en-US", voice: "Charon", voices: VOICES },
+  { id: "ernest", name: "Ernest", note: "The shy one in the box. Jumpy, witty, eager to help.", locale: "en-US", voice: "Fenrir", voices: VOICES },
 ] as const;
 
 export const VOICE_LANGUAGES = [
