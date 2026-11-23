@@ -225,6 +225,43 @@ export class Media {
     return groups.filter((g) => g.items.length);
   }
 
+  /**
+   * Finds something to play by name for one speaker and starts it. Looked for, in order: what the household saved
+   * (favourites, playlists), the SiriusXM guide, Spotify, then internet radio. null = nothing by that name.
+   */
+  async playByName(controlId: string, query: string): Promise<{ title: string; from: string } | null> {
+    const words = query.toLowerCase().replace(/\b(some|a|an|the|music|songs?|play|station|channel|radio|playlist|please)\b/g, " ").split(/[^a-z0-9']+/).filter(Boolean);
+    if (!words.length) return null;
+    /** How well a title answers what was asked: every word present is best, then most words. 0 = not it. */
+    const score = (title: string, more = "") => { const t = `${title} ${more}`.toLowerCase(); const hit = words.filter((w) => t.includes(w)).length; return hit === words.length ? 2 + (title.toLowerCase() === words.join(" ") ? 1 : 0) : hit / words.length >= 0.6 ? 1 : 0; };
+    const best = <T extends MediaItem>(items: T[]) => items.map((it) => ({ it, s: score(it.title, it.subtitle) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s)[0];
+    const start = async (it: MediaItem, from: string) => { await this.play(controlId, it); return { title: it.title, from }; };
+
+    const src = await this.sources(controlId).catch(() => null);
+    if (src) {
+      const saved = best([...src.favourites.flatMap((g) => g.items), ...src.playlists]);
+      if (saved && saved.s >= 2) return start(saved.it, "the household's favourites");
+      if (src.siriusxm) {
+        const guide = await this.siriusxm(controlId).catch(() => []);
+        const ch = best([...new Map(guide.flatMap((g) => g.items).map((it) => [it.id, it])).values()]);
+        if (ch && ch.s >= 2) return start(ch.it, "SiriusXM");
+      }
+      if (src.spotify) {
+        const groups = await this.spotifySearch(query).catch(() => []);
+        // Something that plays as a whole (a playlist, an album, an artist) before a single song, unless a song is the clear match.
+        const playable = groups.flatMap((g) => g.items.map((it) => ({ it, label: g.label }))).filter((x) => x.it.plays !== false);
+        const pick = playable.find((x) => score(x.it.title, x.it.subtitle) >= 2) ?? playable[0];
+        if (pick) return start(pick.it, "Spotify");
+      }
+      if (saved) return start(saved.it, "the household's favourites");
+    }
+    if (await this.hasRadio().catch(() => false)) {
+      const stations = [...(await radio(query, "").catch(() => [])), ...(await radio("", words[0]).catch(() => []))];
+      if (stations[0]) return start(stations[0], "internet radio");
+    }
+    return null;
+  }
+
   // ── playing ──
 
   async play(controlId: string, item: { kind?: string; id?: string; title?: string }): Promise<void> {

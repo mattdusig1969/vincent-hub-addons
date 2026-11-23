@@ -11,15 +11,17 @@
  * short passes (see `key()`), so the key is on no hub and use can be counted per device.
  */
 import { readFileSync } from "node:fs";
-import { CHARACTERS, CLIMATE_MODES, RULES, controlWords, ruleFor, type Control, type ControlRequest, type Device, type Weather, type ListSummary, type Scene, type Room } from "../../../packages/core/src/index.ts";
+import { CHARACTERS, CLIMATE_MODES, RULES, controlWords, ruleFor, type MediaItem, type Control, type ControlRequest, type Device, type Weather, type ListSummary, type Scene, type Room } from "../../../packages/core/src/index.ts";
 
 export interface TalkTurn { role: "you" | "host"; text: string }
 export interface TalkHouse { devices: Device[]; rooms: Room[]; scenes: Scene[]; weather?: Weather; lists: ListSummary[]; homeName: string; timeZone: string }
-export interface TalkAsker { name: string; person: string; deny: string[] }
+export interface TalkAsker { name: string; person: string; deny: string[]; /** The room this phone or tablet lives in, when it has said so. */ room?: string }
 export interface TalkDeps {
   house: () => Promise<TalkHouse>;
   control: (req: ControlRequest) => Promise<void>;
   runScene: (scene: Scene, allowed: (kind: string) => boolean) => Promise<{ done: number; failed: number }>;
+  /** Finds something to play by name for one speaker and starts it: the household's saved things first, then the stations and services it has. */
+  music: (speakerId: string, query: string) => Promise<{ title: string; from: string } | null>;
   /** Writes a line in the home's activity log against the device that asked. */
   say: (what: string, kind: string) => void;
 }
@@ -53,7 +55,7 @@ How to answer:
 What you may do:
 - With the tools, you may switch lights and plugs, dim lights, pause, resume, skip and set the volume of music, set thermostats, run the home's scenes, and lock doors or close garage doors and shades.
 - You can NEVER unlock a door or open a garage door or shade. If asked, say kindly that for safety that has to be done by hand in the app, under Security.
-- You cannot start a particular song, station or playlist by name yet. Say it can be chosen under Media.
+- You may start music by name with play_music: an artist, a song, a style ("some jazz"), a station or a playlist. It needs a room. If the person names a room, use it. If they do not, use their device's own room when WHO YOU ARE TALKING TO gives one. If neither, ask which room before playing anything, and name two or three rooms that have a speaker.
 - You cannot change settings, add devices, or see cameras.
 - After using a tool, say what you did in a few words. If a tool reports a refusal, tell the person plainly.
 
@@ -111,6 +113,11 @@ const TOOLS = [{ functionDeclarations: [
       value: { type: "NUMBER", description: "The brightness, volume or temperature, when the action needs one." },
       mode: { type: "STRING", enum: CLIMATE_MODES.map((m) => m.id), description: "For a thermostat's mode." },
     }, required: ["handle", "action"] } },
+  { name: "play_music", description: "Find music by name and start it on the speaker in a room. Always give the room.",
+    parameters: { type: "OBJECT", properties: {
+      query: { type: "STRING", description: "What to play: an artist, song, album, style, station or playlist, in a few words." },
+      room: { type: "STRING", description: "The room's name, exactly as in THE HOUSE NOW." },
+    }, required: ["query", "room"] } },
   { name: "run_scene", description: "Run one of the home's scenes by its exact name.",
     parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
 ] }];
@@ -173,7 +180,7 @@ export class Talk {
   /** Everything the host is told before a conversation: the rules, who they are, who is asking, and the house. */
   private system(character: string, asker: TalkAsker, now: string, spoken = false): string {
     const who = CHARACTERS.find((c) => c.id === character) ?? CHARACTERS[0];
-    return `${RULES_OF_THE_HOUSE}${spoken ? "\n\nYou are SPEAKING aloud in this conversation, and being spoken to. Keep answers to a sentence or two, said the way your character would say them. THE HOUSE NOW was written when the conversation began: before answering anything about the state of the house later on, call look_at_house for the state this minute." : ""}\n\nYOUR CHARACTER\nYou are ${MANNER[who.id] ?? MANNER.vincent}\n\nWHO YOU ARE TALKING TO\n${asker.person ? `${asker.person}, on ${asker.name}.` : `Someone on ${asker.name}.`}${asker.deny.length ? ` The home's owner has not allowed this device to control: ${asker.deny.map((d) => RULES.find((r) => r.id === d)?.name.toLowerCase()).filter(Boolean).join(", ")}.` : ""}\n\nTHE HOUSE NOW\n${now}`;
+    return `${RULES_OF_THE_HOUSE}${spoken ? "\n\nYou are SPEAKING aloud in this conversation, and being spoken to. Keep answers to a sentence or two, said the way your character would say them. THE HOUSE NOW was written when the conversation began: before answering anything about the state of the house later on, call look_at_house for the state this minute." : ""}\n\nYOUR CHARACTER\nYou are ${MANNER[who.id] ?? MANNER.vincent}\n\nWHO YOU ARE TALKING TO\n${asker.person ? `${asker.person}, on ${asker.name}.` : `Someone on ${asker.name}.`} ${asker.room ? `Their device's own room is ${asker.room}: use it when they name no room.` : "Their device has no room of its own."}${asker.deny.length ? ` The home's owner has not allowed this device to control: ${asker.deny.map((d) => RULES.find((r) => r.id === d)?.name.toLowerCase()).filter(Boolean).join(", ")}.` : ""}\n\nTHE HOUSE NOW\n${now}`;
   }
 
   /**
@@ -224,6 +231,22 @@ export class Talk {
       const r = await this.deps.runScene(scene, (kind) => !barred(kind));
       this.deps.say(`Ran the scene "${scene.name}" by asking the host`, "scenes");
       return { ok: true, did: `Ran the scene "${scene.name}"${r.failed ? `; ${r.failed} thing${r.failed === 1 ? "" : "s"} did not answer` : ""}` };
+    }
+    if (name === "play_music") {
+      if (barred("media")) return { ok: false, error: "The home's owner has not allowed this device to control music and TV." };
+      const query = String(args.query ?? "").trim().slice(0, 80), wanted = String(args.room ?? "").trim().toLowerCase();
+      if (!query) return { ok: false, error: "Nothing was named to play." };
+      const room = house.rooms.find((r) => r.name.toLowerCase() === wanted) ?? house.rooms.find((r) => wanted && (r.name.toLowerCase().includes(wanted) || wanted.includes(r.name.toLowerCase())));
+      const speakers = house.devices.filter((d) => d.status === "added").flatMap((d) => d.controls.filter((c) => c.kind === "media" && c.available).map((c) => ({ d, c })));
+      const withSpeakers = [...new Set(speakers.flatMap((x) => x.d.rooms))].map((id) => house.rooms.find((r) => r.id === id)?.name).filter(Boolean);
+      if (!room) return { ok: false, error: `Ask which room. Rooms with a speaker: ${withSpeakers.join(", ") || "none"}.` };
+      // A speaker that plays music from a library comes before a television.
+      const here = speakers.filter((x) => x.d.rooms.includes(room.id)).sort((a, b) => Number((a.c as any).library === "none") - Number((b.c as any).library === "none"));
+      if (!here.length) return { ok: false, error: `There is no speaker in ${room.name}. Rooms with a speaker: ${withSpeakers.join(", ") || "none"}.` };
+      const found = await this.deps.music(here[0].c.id, query);
+      if (!found) return { ok: false, error: `Nothing called "${query}" could be found to play. Suggest they pick it under Media.` };
+      this.deps.say(`Played ${found.title} on ${labelOf(here[0].d, here[0].c)}, by asking the host`, "media");
+      return { ok: true, did: `Playing ${found.title} in ${room.name}`, ...({ from: found.from } as object) };
     }
     if (name !== "control") return { ok: false, error: "No such tool." };
     const at = handles.get(String(args.handle ?? ""));
