@@ -9,7 +9,7 @@
 import type { HA } from "./ha.ts";
 import type { Devices } from "./devices.ts";
 import { store } from "./store.ts";
-import { brand } from "./brands.ts";
+import { brand, BRANDS } from "./brands.ts";
 import type { Step, StepField } from "../../../packages/core/src/index.ts";
 
 /** Words for the questions makers ask most, when the maker's own wording is missing. */
@@ -123,9 +123,18 @@ export class Flows {
     switch (r?.type) {
       case "create_entry": {
         const entry = r.result?.entry_id as string | undefined;
-        if (entry) { store.addEntry(entry); if (rooms.length) store.setEntryRooms(entry, rooms); }
+        const maker = (name && !/^Anything/.test(name) ? name : undefined) ?? brandOf(domain) ?? (r.title ? String(r.title) : titled(domain));
+        const brought = entry ? await this.devices.settle(() => this.devices.broughtBy(entry)) : [];
+        // One device, and the household already said where it goes: nothing more to ask.
+        if (brought.length === 1 && rooms.length) {
+          await this.devices.place([{ id: brought[0], add: true, rooms }]);
+          return end({ kind: "done", title: `${maker} is in Vincent`, text: "It is in the room you chose, ready to use.", fields: [], maker });
+        }
+        if (brought.length) return end({ kind: "done", title: `${maker} is connected`, text: "", fields: [], brought, maker });
+        // Nothing has arrived yet. If rooms were chosen, whatever comes is added there; otherwise it waits under Add a device.
+        if (entry && rooms.length) { store.addEntry(entry); store.setEntryRooms(entry, rooms); }
         this.devices.invalidate();
-        return end({ kind: "done", title: "Added", text: `${r.title || "It"} is on your hub. Anything it brought is in Vincent now.`, fields: [] });
+        return end({ kind: "done", title: `${maker} is connected`, text: rooms.length ? "Nothing has shown up from it yet. When it does, it goes in the room you chose." : "Nothing has shown up from it yet. Give it a minute, then look under Add a device.", fields: [], maker });
       }
       case "abort": {
         const reason = String(r.reason ?? "unknown");
@@ -166,6 +175,8 @@ export class Flows {
   }
 }
 
+/** The household's name for a maker, from Home Assistant's name for its driver. */
+const brandOf = (domain: string): string | undefined => BRANDS.find((b) => b.driver === domain && b.id !== "homekit" && b.id !== "ecobee")?.name;
 const stopped = (text: string): Step => ({ kind: "stopped", title: "Not added", text, fields: [] });
 
 /** One of the maker's questions as a field the app can draw. */

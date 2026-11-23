@@ -77,6 +77,12 @@ export const store = {
   addEntry(entryId: string): void {
     if (!saved.addedEntries.includes(entryId)) { saved.addedEntries.push(entryId); save(); }
   },
+  /** True when the household said yes to everything this maker's account brings. */
+  hasEntry(entryId: string): boolean { return saved.addedEntries.includes(entryId); },
+  dropEntry(entryId: string): void { saved.addedEntries = saved.addedEntries.filter((e) => e !== entryId); if (saved.entryRooms) delete saved.entryRooms[entryId]; save(); },
+  /** The household's own word on one device, if it gave one. */
+  own(id: string): "added" | "ignored" | undefined { return saved.devices[id]; },
+  hasOwnRooms(id: string): boolean { return !!saved.deviceRooms?.[id]; },
   get setUp(): boolean { return !!saved.pin; },
   get owner(): string { return saved.owner ?? ""; },
   setup(owner: string, pin: string, ha?: { username: string; password: string }): void {

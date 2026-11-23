@@ -194,6 +194,10 @@ export interface Brand {
   tips: string;
   /** "matter" when a Matter code is another way to add this brand. */
   also?: string;
+  /** Where to find this maker's Matter code, one short step per line. */
+  guide?: string[];
+  /** Which of the maker's devices this works for, in a sentence. */
+  works?: string;
 }
 
 /** One question from a maker while a device is being added. */
@@ -224,7 +228,14 @@ export interface Step {
   fields: StepField[];
   errors?: Record<string, string>;
   message?: string;
+  /** With `done`: the devices the maker brought (device ids), waiting to be given rooms. */
+  brought?: string[];
+  /** With `done`: the maker's name ("Ring"). */
+  maker?: string;
 }
+
+/** One line of "where does each of these live": add it or leave it out, and its rooms. */
+export interface Placement { id: string; add: boolean; rooms: string[]; newRooms?: string[] }
 
 export interface AddResult {
   ok: boolean;

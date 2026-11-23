@@ -16,13 +16,26 @@ import type { Brand } from "../../../packages/core/src/index.ts";
 interface Entry extends Brand { driver?: string }
 
 const B = (id: string, name: string, category: Brand["category"], how: Brand["how"], driver: string | undefined, tips: string, also?: string): Entry => ({ id, name, category, how, driver, tips, also });
+/** A brand added with a Matter code: which of its devices that works for, and where the maker keeps the code. */
+const M = (b: Entry, works: string, guide: string[]): Entry => ({ ...b, works, guide });
+
+// Where each smart-home app keeps "share this device with another app". The code it gives is new each time.
+const FROM_APPLE = ["Open the Home app on your iPhone and press and hold the device's tile, then tap Accessory Settings.", "Scroll to the bottom and tap Turn On Pairing Mode.", "A code appears. Tap Copy Code, or read it off, and enter it here."];
+const FROM_GOOGLE = ["Open the Google Home app, tap Devices, then press and hold the device's tile.", "Tap the gear, then Linked Matter apps & services.", "Tap Link apps & services, then Use pairing code.", "Enter the code here straight away: Google's code lasts about three minutes."];
+const FROM_ALEXA = ["Open the Alexa app, tap Devices and choose the device.", "Tap the gear, then Other Assistants and Apps.", "Tap Add Another. An 11-digit code appears; enter it here."];
+const FROM_SMARTTHINGS = ["Open the SmartThings app and tap the device.", "Tap the three dots at the top right, then Share with other services.", "Choose Share (or Share device) and use the number under the square code."];
+const FIRST_APP = "If you set it up in Apple Home, Google Home or Alexa, that app makes the code: choose \"Already in Apple Home\", \"Already in Google Home\" or \"Already in Alexa\" from the brand list for the steps.";
 
 export const BRANDS: Entry[] = [
   // Lights
   B("hue", "Philips Hue", "lights", "steps", "hue", "The Hue Bridge must be plugged into your router. You will be asked to press the button on top of the bridge."),
-  B("govee", "Govee", "lights", "search", "govee_light_local", "Switch the light on. In the Govee app, open the light's settings and turn on LAN Control. Newer Govee lights can also be added with a Matter code.", "matter"),
+  M(B("govee", "Govee", "lights", "search", "govee_light_local", "Switch the light on. In the Govee app, open the light's settings and turn on LAN Control, then search. Lights with the Matter badge can be added with their code instead.", "matter"),
+    "For Govee lights with the Matter badge on the box.",
+    ["Open the Govee Home app and tap the light.", "Tap the gear at the top right.", "Scroll down to Other and tap Matter. The light's code appears.", "Enter that code here.", FIRST_APP]),
   B("lifx", "LIFX", "lights", "search", "lifx", "Switch the light on at the wall. It must already be set up in the LIFX app and on your Wi-Fi."),
-  B("kasa", "TP-Link Kasa and Tapo", "lights", "steps", "tplink", "Leave the address empty to search. Newer devices ask for your TP-Link account so the hub can talk to them directly."),
+  M(B("kasa", "TP-Link Kasa and Tapo", "lights", "steps", "tplink", "Leave the address empty to search. Newer devices ask for your TP-Link account so the hub can talk to them directly. Models with the Matter badge can be added with a code instead.", "matter"),
+    "For Tapo and Kasa models with the Matter badge (model numbers usually end in M).",
+    ["Tapo app: tap the device, then the gear at the top right, then Matter Setup Code.", "Kasa app: tap the device, then the gear, then Device Info, then Matter Setup Code.", "Enter the code here. It lasts 15 minutes; keep that page open while you do."]),
   B("wled", "WLED", "lights", "steps", "wled", "Enter the strip's address, shown in the WLED app."),
   B("nanoleaf", "Nanoleaf", "lights", "steps", "nanoleaf", "You will be asked to hold the power button on the panels for a few seconds."),
   B("yeelight", "Yeelight", "lights", "steps", "yeelight", "Turn on LAN Control for the light in the Yeelight app first."),
@@ -32,7 +45,18 @@ export const BRANDS: Entry[] = [
   B("elgato", "Elgato Key Light", "lights", "steps", "elgato", "Enter the light's address."),
   // Plugs and switches
   B("wemo", "Belkin Wemo", "other", "search", "wemo", "The plug must be set up in the Wemo app and on your Wi-Fi."),
-  B("meross", "Meross", "other", "matter", undefined, "Meross gives no way to control its plugs on the home network except Matter. Newer Meross plugs have a Matter code on the device or in the Meross app (Device, then Matter). Older ones cannot be added.", "matter"),
+  M(B("meross", "Meross", "other", "matter", undefined, "Meross plugs and switches with the Matter badge can be added with a code. Older Meross devices without the badge cannot be added.", "matter"),
+    "For Meross devices with the Matter badge.",
+    ["Meross sets its Matter devices up through Apple Home (iPhone) or Google Home (Android), so that app makes the code.", ...FROM_APPLE.map((x) => `iPhone: ${x}`), "Android: in Google Home, press and hold the device, tap the gear, Linked Matter apps & services, Link apps & services, Use pairing code.", "Never set up anywhere? Use the code printed on the plug itself."]),
+  M(B("aqara", "Aqara", "other", "matter", undefined, "Aqara sensors, buttons and switches come in through an Aqara hub (M2, M3, M1S, E1 or the G3 camera hub).", "matter"),
+    "For homes with an Aqara hub. Everything paired to the hub comes with it.",
+    ["Open the Aqara Home app and tap Accessories, then your hub.", "Tap the three dots at the top right.", "Tap Matter (on some versions: Third-Party Matter Ecosystems).", "Tap Matter Pairing Code and enter the number here. It lasts 15 minutes."]),
+  M(B("switchbot", "SwitchBot", "other", "matter", undefined, "SwitchBot curtains, locks and buttons come in through a SwitchBot hub (Hub 2, Hub 3, or the Hub Mini marked Matter Enabled).", "matter"),
+    "For homes with a SwitchBot hub.",
+    ["Open the SwitchBot app and tap your hub.", "Tap the gear, then Matter Setup.", "Enter the code shown there here.", "Afterwards, go back to Matter Setup, tap Secondary Devices, and add each curtain, lock or button you want Vincent to see.", FIRST_APP]),
+  M(B("leviton", "Leviton Decora Smart", "lights", "matter", undefined, "Leviton's second-generation Decora Smart Wi-Fi switches, dimmers and plugs can be added with a code.", "matter"),
+    "For Decora Smart Wi-Fi 2nd Gen (models starting D2). First-generation models cannot be added.",
+    ["In the My Leviton app, join the Matter Early Access Program and run System Updates (once).", "Tap the switch or dimmer, then Device Settings.", "Tap Matter Pairing Code and enter the number under the square code here."]),
   B("amazon_plug", "Amazon Smart Plug", "other", "none", undefined, "Amazon's own plugs can only be controlled through Alexa. Limited by manufacturer."),
   B("wyze", "Wyze", "other", "none", undefined, "Wyze devices work only through the Wyze app and account. Limited by manufacturer."),
   B("smartthings", "SmartThings", "other", "link", "smartthings", "SmartThings needs an account link on Samsung's website."),
@@ -49,7 +73,10 @@ export const BRANDS: Entry[] = [
   B("heos", "HEOS", "media", "steps", "heos", "Enter the address of any one HEOS speaker."),
   B("bluesound", "Bluesound", "media", "steps", "bluesound", "Enter the player's address."),
   // Climate
-  B("nest", "Google Nest", "climate", "link", "nest", "Nest needs an account link on Google's website."),
+  M(B("nest_thermostat", "Google Nest thermostat", "climate", "matter", undefined, "Newer Nest thermostats can be added with a code from the Google Home app.", "matter"),
+    "For the Nest Thermostat (2020) and the Nest Learning Thermostat 4th generation. Older Nest thermostats cannot be added yet.",
+    FROM_GOOGLE),
+  B("nest", "Google Nest cameras and doorbells", "security", "link", "nest", "Nest cameras and doorbells need an account link on Google's website."),
   B("ecobee", "ecobee", "climate", "steps", "homekit_controller", "ecobee thermostats are added with their HomeKit code. On the thermostat: Menu, Settings, Reset, Reset HomeKit, then find the code under Menu, Settings, HomeKit."),
   B("honeywell", "Honeywell Total Connect Comfort", "climate", "steps", "honeywell", "You will be asked for your Total Connect Comfort sign-in."),
   B("sensibo", "Sensibo", "climate", "steps", "sensibo", "You will be asked for an API key, made on Sensibo's website under your account."),
@@ -59,12 +86,23 @@ export const BRANDS: Entry[] = [
   B("reolink", "Reolink", "security", "steps", "reolink", "Enter the camera's or recorder's address and its own sign-in (not the Reolink app account)."),
   B("unifi", "UniFi Protect", "security", "steps", "unifiprotect", "Enter the console's address and a local user made for the hub."),
   B("onvif", "Other cameras (ONVIF)", "security", "steps", "onvif", "Most network cameras speak ONVIF once it is switched on in the camera's own settings. You will need its address and sign-in."),
+  M(B("eufy", "eufy", "security", "matter", undefined, "Only eufy's Wi-Fi smart locks (FamiLock S3 and S3 Max) can be added. eufy cameras and doorbells work only in the eufy app: Limited by manufacturer.", "matter"),
+    "For eufy FamiLock S3 and S3 Max. Other eufy locks use Thread, which this hub cannot reach yet.",
+    ["Open the eufy app, tap the lock, then Settings.", "Tap Work with Matter, then Connect to Third-party Ecosystem.", "Tap Start Pairing. The lock's light blinks blue.", "Scan the Matter code on the lock or its box here.", FIRST_APP]),
   B("blink", "Blink", "security", "steps", "blink", "You will be asked for your Blink sign-in and the code Blink sends you."),
   B("schlage", "Schlage", "security", "steps", "schlage", "You will be asked for your Schlage Home sign-in."),
   B("yale", "Yale and August", "security", "link", "yale", "Yale and August need an account link on their website."),
   B("arlo", "Arlo", "security", "none", undefined, "Arlo cameras work only through the Arlo app and account. Limited by manufacturer."),
   B("simplisafe", "SimpliSafe", "security", "link", "simplisafe", "SimpliSafe needs an account link on its website."),
   // By code
+  M(B("from_apple", "Already in Apple Home", "other", "matter", undefined, "A device you already use in Apple Home can be shared with Vincent, and keeps working in Apple Home too.", "matter"),
+    "For devices added to Apple Home with a Matter code. If there is no Turn On Pairing Mode row, the device cannot be shared this way.", FROM_APPLE),
+  M(B("from_google", "Already in Google Home", "other", "matter", undefined, "A device you already use in Google Home can be shared with Vincent, and keeps working in Google Home too.", "matter"),
+    "For Matter devices in Google Home.", FROM_GOOGLE),
+  M(B("from_alexa", "Already in Alexa", "other", "matter", undefined, "A device you already use with Alexa can be shared with Vincent, and keeps working with Alexa too.", "matter"),
+    "For devices added to Alexa with a Matter code. Devices linked through a skill have no such option.", FROM_ALEXA),
+  M(B("from_smartthings", "Already in SmartThings", "other", "matter", undefined, "A Matter device in SmartThings can be shared with Vincent.", "matter"),
+    "For Matter devices in SmartThings.", FROM_SMARTTHINGS),
   B("matter", "Anything with a Matter code", "other", "matter", undefined, "Matter is a shared language many newer bulbs, plugs, locks and sensors speak. The device must already be on your Wi-Fi, through its maker's app or another smart-home app. Ask that app for a Matter code to share it."),
   B("homekit", "Anything with a HomeKit code", "other", "steps", "homekit_controller", "The device must not be in Apple Home at the same time: remove it there first. Then it appears here to be paired with the eight-digit code on its label."),
 ];

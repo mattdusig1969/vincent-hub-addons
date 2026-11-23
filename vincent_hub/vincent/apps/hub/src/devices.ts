@@ -185,7 +185,57 @@ export class Devices {
   }
 
   async setStatus(id: string, status: "found" | "ignored"): Promise<void> {
+    await this.detach(id);
     store.set(id, status);
+  }
+
+  /** The devices one maker's account brought (device ids). */
+  async broughtBy(entry: string): Promise<string[]> {
+    this.invalidate();
+    return (await this.snapshot()).devices.filter((d) => this.entriesOf.get(d.id)?.includes(entry)).map((d) => d.id);
+  }
+
+  /** A maker's devices arrive a few at a time after its account is connected: wait until the count stops growing. */
+  async settle(read: () => Promise<string[]>, longest = 14_000): Promise<string[]> {
+    const until = Date.now() + longest;
+    let last: string[] = [];
+    for (;;) {
+      const now = await read();
+      if (now.length && now.length === last.length) return now;
+      last = now;
+      if (Date.now() > until) return last;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
+  async ids(): Promise<string[]> { this.invalidate(); return (await this.snapshot()).devices.map((d) => d.id); }
+
+  /**
+   * An account that was added whole ("everything it brings") is turned into one choice per device,
+   * so a single device of it can be left out or moved without the rest following.
+   */
+  private async detach(id: string): Promise<void> {
+    const whole = (this.entriesOf.get(id) ?? []).filter((e) => store.hasEntry(e));
+    if (!whole.length) return;
+    const snap = await this.snapshot();
+    for (const d of snap.devices) {
+      const entries = this.entriesOf.get(d.id) ?? [];
+      if (!entries.some((e) => whole.includes(e))) continue;
+      if (!store.hasOwnRooms(d.id)) store.setRooms(d.id, store.roomsOf(d.id, entries));
+      if (!store.own(d.id)) store.set(d.id, "added");
+    }
+    for (const e of whole) store.dropEntry(e);
+  }
+
+  /** Several devices at once: each is added to its rooms, or left under "Add a device". */
+  async place(items: { id: string; add: boolean; rooms: string[] }[]): Promise<void> {
+    const snap = await this.snapshot();
+    for (const it of items) {
+      if (!snap.devices.some((d) => d.id === it.id) || snap.flows.has(it.id)) continue;
+      await this.detach(it.id);
+      if (it.add) { store.set(it.id, "added"); store.setRooms(it.id, it.rooms); }
+      else store.set(it.id, "found");
+    }
   }
 
   /** Commands only reach devices the household added. */

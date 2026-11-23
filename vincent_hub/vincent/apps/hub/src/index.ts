@@ -30,6 +30,7 @@
  *   GET  /api/brands                 brands that can be added by name
  *   POST /api/adding {brand, rooms}  start adding one -> a Step; POST /api/adding/:flow/answer|poll|cancel
  *   POST /api/matter {code}          add a device by its Matter code
+ *   POST /api/place {items}          several devices at once: add each to its rooms, or leave it out
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
  *
  * Serves the built app too, when apps/app/dist exists.
@@ -78,7 +79,7 @@ async function supervisor(method: string, path: string, timeout = 20_000): Promi
   return j.data ?? {};
 }
 /** How the last "add by Matter code" went. */
-let matter: { state: "idle" | "working" | "done" | "failed"; message: string } = { state: "idle", message: "" };
+let matter: { state: "idle" | "working" | "done" | "failed"; message: string; brought?: string[] } = { state: "idle", message: "" };
 
 /** Why a Matter code did not work, in plain words. */
 function matterWhy(m: string): string {
@@ -350,8 +351,13 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (matter.state === "working") return json(res, 200, matter);
     // Looking for the device can take a few minutes, so the app is answered at once and asks how it went.
     matter = { state: "working", message: "Looking for the device. This can take a couple of minutes." };
+    const before = new Set(await devices.ids());
     ha.call({ type: "matter/commission", code, network_only: true }, 240_000)
-      .then(() => { matter = { state: "done", message: "Added to your hub. It appears under Add a device in a moment." }; devices.invalidate(); })
+      .then(async () => {
+        // What the code brought: whatever is on the hub now that was not there before.
+        const brought = await devices.settle(async () => (await devices.ids()).filter((id) => !before.has(id)), 20_000);
+        matter = { state: "done", message: brought.length ? "Your hub has it." : "Your hub has it. It appears under Add a device in a moment.", brought };
+      })
       .catch((e: Error) => { matter = { state: "failed", message: matterWhy(e.message) }; })
       .finally(changed);
     return json(res, 200, matter);
@@ -416,6 +422,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return json(res, 400, { error: "That is not a photo." });
       if (!store.setPhoto(room[1], jpeg)) return json(res, 404, { error: "That room is gone." });
     }
+    return done();
+  }
+  if (path === "/api/place") {
+    const b = await body(req);
+    const items = (Array.isArray(b.items) ? b.items : []).slice(0, 200).map((it: any) => ({ id: String(it.id ?? ""), add: !!it.add, rooms: it.add ? roomIds(it) : [] }));
+    await devices.place(items);
     return done();
   }
   const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore|rooms|rename)$/.exec(path);
