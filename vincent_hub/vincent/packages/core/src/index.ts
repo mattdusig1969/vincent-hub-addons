@@ -384,3 +384,36 @@ export const outfitOf = (custom: CustomStyle | undefined, character: string): st
 export const DEFAULT_CUSTOM: CustomStyle = { font: "serif", shape: "traditional" };
 
 export * from "./scenes.ts";
+
+/** What the owner can stop one phone or tablet from controlling. */
+export const RULES = [
+  { id: "lights", name: "Lights and plugs", kinds: ["light", "switch"] },
+  { id: "media", name: "Music and TV", kinds: ["media"] },
+  { id: "climate", name: "Thermostats", kinds: ["climate"] },
+  { id: "locks", name: "Locks", kinds: ["lock"] },
+  { id: "doors", name: "Garage doors and shades", kinds: ["cover"] },
+] as const;
+export type RuleId = (typeof RULES)[number]["id"];
+export const ruleFor = (kind: string): RuleId | undefined => RULES.find((r) => (r.kinds as readonly string[]).includes(kind))?.id;
+/** The kinds of line in the home's activity log, for filtering it. */
+export const LOG_KINDS = [
+  { id: "settings", name: "Settings" }, { id: "locks", name: "Locks" }, { id: "doors", name: "Doors" }, { id: "lights", name: "Lights" },
+  { id: "climate", name: "Climate" }, { id: "media", name: "Music and TV" }, { id: "scenes", name: "Scenes" },
+] as const;
+export type LogKind = (typeof LOG_KINDS)[number]["id"];
+/** One thing done to one control, in the log's words. "" = not worth a line (a slider nudged, a colour changed). */
+export function controlWords(name: string, kind: string, action: string, value?: number, mode?: string): string {
+  switch (action) {
+    case "on": return `Turned on ${name}`;
+    case "off": return `Turned off ${name}`;
+    case "lock": return `Locked ${name}`;
+    case "unlock": return `Unlocked ${name}`;
+    case "open": return `Opened ${name}`;
+    case "close": return `Closed ${name}`;
+    case "target": return `Set ${name} to ${value}°`;
+    case "mode": return `Set ${name} to ${mode ?? "a new mode"}`;
+    case "play": return kind === "media" ? `Started ${name} playing` : "";
+    case "pause": return kind === "media" ? `Paused ${name}` : "";
+    default: return "";
+  }
+}

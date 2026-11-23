@@ -67,7 +67,7 @@ import { MatterKeeper } from "./matter.ts";
 import { changes } from "./changes.ts";
 import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
-import { dayKey, whenDue, whenWords, type SunTimes } from "../../../packages/core/src/index.ts";
+import { dayKey, whenDue, whenWords, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
 import { THEMES, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
@@ -156,7 +156,7 @@ setInterval(() => {
   for (const s of store.scenes()) {
     if (!whenDue(s.when, now, zone, sunTimes()) || store.sceneRan(s.id) === today) continue;
     store.setSceneRan(s.id, today);
-    changes.add("Vincent", `Ran "${s.name}" on its schedule`);
+    changes.add("Vincent", `Ran "${s.name}" on its schedule`, "scenes");
     scenes.run(s.steps)
       .then((r) => console.log(`[scenes] "${s.name}" ran on its schedule (${whenWords(s.when!)}): ${r.done} set${r.failed ? `, ${r.failed} did not answer` : ""}`))
       .catch((e: Error) => console.log(`[scenes] "${s.name}" did not run on its schedule: ${e.message}`));
@@ -240,12 +240,17 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Another phone or tablet joins the home with the PIN.
   if (m === "POST" && path === "/api/pair") {
     const b = await body(req);
-    const r = pinOk(b.pin);
-    if (r !== "ok") return pinRefusal(res, r);
+    // The join PIN lets a device in and nothing more; the admin PIN works too (the owner's own second device).
+    const byJoinPin = !!store.joinPin && Date.now() >= lockedUntil && String(b.pin ?? "") === store.joinPin;
+    if (!byJoinPin) {
+      const r = pinOk(b.pin);
+      if (r !== "ok") return pinRefusal(res, r);
+    }
     const name = String(b.name ?? "").trim().slice(0, 40) || "A device", person = String(b.person ?? "").trim().slice(0, 30);
     changes.add(person ? `${person}, on ${name}` : name, "Joined this home");
     changed();
-    return json(res, 200, { ok: true, key: store.pair(name, person) });
+    // A device let in with the join PIN starts with the rules the owner set for newcomers; one let in with the admin PIN is the owner's own.
+    return json(res, 200, { ok: true, key: store.pair(name, person, byJoinPin ? store.joinDeny : []) });
   }
 
   // Everything below is for paired devices only. (An event stream cannot send a header, so the key may ride in the address.)
@@ -253,11 +258,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (!store.paired(key)) return json(res, 401, { code: "pair", error: "This device has not joined this home." });
   /** Writes one line in the home's change log, against this phone or tablet (and its person, when it has said who). */
   const me = store.device(key)!;
-  const say = (what: string) => changes.add(me.person && !me.name.startsWith(me.person) ? `${me.person}, on ${me.name}` : me.name, what);
+  const say = (what: string, kind = "settings") => { if (what) changes.add(me.person && !me.name.startsWith(me.person) ? `${me.person}, on ${me.name}` : me.name, what, kind); };
+  /** The control a request is about, with its device. */
+  const controlOf = async (id: string) => { for (const d of await devices.all()) { const c = d.controls.find((x) => x.id === id); if (c) return { c, d }; } return undefined; };
+  /** The owner's rules for this phone or tablet: the reason it may not do this, or "" when it may. */
+  const barred = (kind: string): string => { const rule = ruleFor(kind); return rule && me.deny.includes(rule) ? `This device is not allowed to control ${RULES.find((r) => r.id === rule)!.name.toLowerCase()}. The home's owner can change that in Settings.` : ""; };
   const roomWord = (id: string) => (id ? store.rooms().find((r) => r.id === id)?.name ?? "a room" : "the whole home");
   const deviceWord = async (id: string) => (await devices.all()).find((d) => d.id === id)?.name ?? "a device";
   if (m === "GET" && path === "/api/changes") return json(res, 200, { changes: changes.recent() });
-  if (m === "GET" && path === "/api/phones") return json(res, 200, { phones: store.phones().map((p) => ({ ...p, me: p.id === me.id })) });
+  if (m === "GET" && path === "/api/phones") return json(res, 200, { phones: store.phones().map((p) => ({ ...p, me: p.id === me.id })), joinPinSet: !!store.joinPin, joinPin: isUnlocked(key) ? store.joinPin : "", joinDeny: store.joinDeny });
   if (m === "POST" && path === "/api/phones/me") {
     const b = await body(req);
     store.nameDevice(key, String(b.name ?? ""), String(b.person ?? ""));
@@ -360,8 +369,13 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req);
     const steps = b.id ? store.scenes().find((x) => x.id === b.id)?.steps : cleanSteps(b.steps);
     if (!steps) return json(res, 404, { error: "That scene is gone." });
-    const r = await scenes.run(steps);
-    return json(res, 200, { ok: true, ...r });
+    // The owner's rules hold inside a scene too: the parts this device may not control are left out.
+    const all = await devices.all(), kindOfStep = (id: string) => all.flatMap((d) => d.controls).find((c) => c.id === id)?.kind ?? "";
+    const allowed = steps.filter((st) => !barred(kindOfStep(st.id)));
+    if (!allowed.length && steps.length) return json(res, 403, { code: "rule", error: "This device is not allowed to control anything in that scene." });
+    const r = await scenes.run(allowed);
+    if (b.id) say(`Ran the scene "${store.scenes().find((x) => x.id === b.id)?.name ?? ""}"`, "scenes");
+    return json(res, 200, { ok: true, ...r, ...(allowed.length < steps.length ? { message: `${steps.length - allowed.length} part${steps.length - allowed.length === 1 ? "" : "s"} left out: this device is not allowed to control them.` } : {}) });
   }
   if (m === "POST" && path === "/api/scenes/undo") return json(res, 200, { ok: await scenes.back(String((await body(req)).undo ?? "")) });
   if (m === "POST" && path === "/api/scenes/refuse") { store.refuseScene(String((await body(req)).key ?? "")); changed(); return json(res, 200, { ok: true }); }
@@ -390,12 +404,20 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   }
   const kindOf = /^\/api\/rooms\/([a-f0-9]+)\/kind$/.exec(path);
   if (m === "POST" && kindOf) { const k = (await body(req)).kind; store.setRoomKind(kindOf[1], isRoomKind(k) ? k : undefined); say(`Changed what kind of room ${roomWord(kindOf[1])} is`); changed(); return json(res, 200, { ok: true }); }
-  if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
+  if (m === "POST" && path === "/api/control") {
+    const b = await body(req), at = await controlOf(String(b.id ?? ""));
+    const no = at ? barred(at.c.kind) : "";
+    if (no) return json(res, 403, { code: "rule", error: no });
+    await devices.control(b);
+    if (at) say(controlWords(at.c.name === at.d.name || at.d.controls.length === 1 ? at.d.name : `${at.d.name} ${at.c.name}`, at.c.kind, String(b.action), b.value, CLIMATE_MODES.find((x) => x.id === b.mode)?.name ?? b.mode), ruleFor(at.c.kind) ?? "settings");
+    return json(res, 200, { ok: true });
+  }
   const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm|group)$/.exec(path);
+  if (med && m === "POST" && barred("media")) return json(res, 403, { code: "rule", error: barred("media") });
   if (med && m === "POST" && med[2] === "group") { await media.group(med[1], (await body(req)).members); return json(res, 200, { ok: true }); }
   if (med && m === "GET" && med[2] === "siriusxm") return json(res, 200, { groups: await media.siriusxm(med[1]) });
   if (med && m === "GET" && med[2] === "sources") return json(res, 200, await media.sources(med[1]));
-  if (med && m === "POST" && med[2] === "play") { await media.play(med[1], await body(req)); return json(res, 200, { ok: true }); }
+  if (med && m === "POST" && med[2] === "play") { const b = await body(req); await media.play(med[1], b); const at = await controlOf(med[1]); say(`Played ${String(b.title ?? "something").slice(0, 60)} on ${at?.d.name ?? "a speaker"}`, "media"); return json(res, 200, { ok: true }); }
   const li = /^\/api\/lists\/([a-f0-9]+)$/.exec(path);
   if (li && m === "GET") return json(res, 200, await lists.items(li[1]));
   if (li && m === "POST") { await lists.change(li[1], await body(req)); changed(); return json(res, 200, { ok: true }); }
@@ -507,6 +529,35 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return;
   }
   // Adding by brand, and answering what a maker asks.
+  // The join PIN: what a new phone or tablet types to come in. The owner chooses it and can look it up here.
+  if (path === "/api/join-pin") {
+    const b = await body(req);
+    if (b.pin !== undefined) {
+      const pin = String(b.pin).trim();
+      if (pin && !/^\d{4,8}$/.test(pin)) return json(res, 400, { error: "A join PIN is 4 to 8 digits." });
+      if (pin && store.checkPin(pin)) return json(res, 400, { error: "That is the admin PIN. The join PIN must be a different one, or joining would hand over the settings too." });
+      store.setJoinPin(pin);
+      say(pin ? "Changed the join PIN" : "Removed the join PIN");
+      changed();
+    }
+    return json(res, 200, { ok: true, joinPin: store.joinPin });
+  }
+  if (path === "/api/join-rules") {
+    const asked = (await body(req)).deny;
+    const deny = (Array.isArray(asked) ? asked : []).map(String).filter((d: string) => RULES.some((r) => r.id === d));
+    store.setJoinDeny(deny);
+    say(deny.length ? `Set the rules for new joiners: no ${deny.map((d: string) => RULES.find((r) => r.id === d)!.name.toLowerCase()).join(", ")}` : "Set the rules for new joiners: everything allowed");
+    return done();
+  }
+  const phoneRules = /^\/api\/phones\/([a-f0-9]+)\/rules$/.exec(path);
+  if (phoneRules) {
+    const asked = (await body(req)).deny;
+    const deny = (Array.isArray(asked) ? asked : []).map(String).filter((d: string) => RULES.some((r) => r.id === d));
+    const name = store.setDeny(phoneRules[1], deny);
+    if (!name) return json(res, 404, { error: "That device is no longer in this home." });
+    say(deny.length ? `Stopped ${name} from controlling ${deny.map((d: string) => RULES.find((r) => r.id === d)!.name.toLowerCase()).join(", ")}` : `Let ${name} control everything again`);
+    return done();
+  }
   const phoneGone = /^\/api\/phones\/([a-f0-9]+)\/remove$/.exec(path);
   if (phoneGone) {
     if (phoneGone[1] === me.id) return json(res, 400, { error: "This is the device you are holding. Use \"Connect to a different hub\" to leave." });

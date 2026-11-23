@@ -22,7 +22,11 @@ interface Saved {
   /** The hub's own Home Assistant login, so the household is never locked out of it. */
   ha?: { username: string; password: string };
   /** Phones and tablets allowed to talk to this home: sha-256 of each one's key -> its name. */
-  paired?: Record<string, { name: string; since: string; person?: string }>;
+  paired?: Record<string, { name: string; since: string; person?: string; /** What this device may not control (rule ids). */ deny?: string[] }>;
+  /** The PIN that lets a new phone or tablet join. Not the admin PIN: it opens no settings. Kept readable so the owner can look it up. */
+  joinPin?: string;
+  /** The rules a device starts with when it joins with the join PIN. The owner can change any one device afterwards. */
+  joinDeny?: string[];
   /** Vincent's own rooms. Home Assistant allows one room per device; Vincent allows several. */
   rooms?: { id: string; name: string; photoAt?: number; kind?: RoomKind }[];
   /** One-tap scenes, in the order they were made. */
@@ -111,18 +115,18 @@ export const store = {
     return timingSafeEqual(got, Buffer.from(saved.pin.hash, "hex"));
   },
   /** Lets a phone or tablet in, and returns the key it must show from now on. Only the key's hash is kept. */
-  pair(name: string, person = ""): string {
+  pair(name: string, person = "", deny: string[] = []): string {
     const key = randomBytes(24).toString("base64url");
-    (saved.paired ??= {})[sha(key)] = { name, since: new Date().toISOString(), ...(person ? { person } : {}) };
+    (saved.paired ??= {})[sha(key)] = { name, since: new Date().toISOString(), ...(person ? { person } : {}), ...(deny.length ? { deny: [...deny] } : {}) };
     save();
     return key;
   },
   paired(key: string): boolean { return !!key && !!saved.paired?.[sha(key)]; },
   /** The phone or tablet a key belongs to: a short id that never changes, and the name it was given when it joined. */
-  device(key: string): { id: string; name: string; person: string } | undefined { const h = sha(key), d = saved.paired?.[h]; return d ? { id: h.slice(0, 16), name: d.name, person: d.person ?? "" } : undefined; },
+  device(key: string): { id: string; name: string; person: string; deny: string[] } | undefined { const h = sha(key), d = saved.paired?.[h]; return d ? { id: h.slice(0, 16), name: d.name, person: d.person ?? "", deny: d.deny ?? [] } : undefined; },
   /** Every phone and tablet that has joined, oldest first. */
-  phones(): { id: string; name: string; person: string; since: string }[] {
-    return Object.entries(saved.paired ?? {}).map(([h, d]) => ({ id: h.slice(0, 16), name: d.name, person: d.person ?? "", since: d.since })).sort((a, b) => a.since.localeCompare(b.since));
+  phones(): { id: string; name: string; person: string; since: string; deny: string[] }[] {
+    return Object.entries(saved.paired ?? {}).map(([h, d]) => ({ id: h.slice(0, 16), name: d.name, person: d.person ?? "", since: d.since, deny: d.deny ?? [] })).sort((a, b) => a.since.localeCompare(b.since));
   },
   /** A phone or tablet says what it is called and who uses it. */
   nameDevice(key: string, name: string, person: string): void {
@@ -133,6 +137,18 @@ export const store = {
     if (p) d.person = p; else delete d.person;
     save();
   },
+  /** What one phone or tablet may not control. Returns its name, or "" when there is no such device. */
+  setDeny(id: string, deny: string[]): string {
+    const h = Object.keys(saved.paired ?? {}).find((k) => k.slice(0, 16) === id);
+    if (!h) return "";
+    if (deny.length) saved.paired![h].deny = deny; else delete saved.paired![h].deny;
+    save();
+    return saved.paired![h].name;
+  },
+  get joinPin(): string { return saved.joinPin ?? ""; },
+  get joinDeny(): string[] { return saved.joinDeny ?? []; },
+  setJoinDeny(deny: string[]): void { if (deny.length) saved.joinDeny = deny; else delete saved.joinDeny; save(); },
+  setJoinPin(pin: string): void { if (pin) saved.joinPin = pin; else delete saved.joinPin; save(); },
   /** Takes a phone or tablet out of the home: its key stops working at once. Returns its name. */
   unpair(id: string): string {
     const h = Object.keys(saved.paired ?? {}).find((k) => k.slice(0, 16) === id);
