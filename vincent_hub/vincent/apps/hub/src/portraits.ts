@@ -19,6 +19,8 @@ const LOOKS: Record<string, string> = {
   vincent: "a man of about sixty with silver hair swept back and a grey handlebar moustache: Vincent, the butler",
   roxy: "a woman in her mid-forties with blonde hair in a braided updo: Roxy, the house manager",
   otto: "an upright brass cabinet machine with one large living eye behind a round porthole and a plate reading OTTO",
+  julian: "a Black man in his mid-thirties with short hair, a trim full beard and round tortoiseshell glasses: Julian, the well-read one",
+  sora: "a Japanese woman in her mid-twenties with long black hair in a low ponytail and a soft fringe, smiling brightly: Sora, the mathematician",
   ernest: "a small riveted brass box with two big round worried eyes peering from a dark slot and a plate reading ERNEST",
 };
 const MACHINES = new Set(["otto", "ernest"]);

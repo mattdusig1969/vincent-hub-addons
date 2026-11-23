@@ -295,12 +295,27 @@ const LADIES = [
   { id: "Aoede", sex: "Female", name: "Breezy and relaxed", note: "Nothing is ever a problem" },
   { id: "Zephyr", sex: "Female", name: "Bright and sparkling", note: "A morning person, all day" },
 ] as const;
+/** Julian is a man: his own voice first, then four more men's. */
+const GENTS = [
+  { id: "Sadachbia", sex: "Male", name: "Lively and quick", note: "Has a line for everything" },
+  { id: "Algieba", sex: "Male", name: "Smooth and easy", note: "Never in a hurry" },
+  ...VOICES.filter((v) => v.sex === "Male"),
+] as const;
+/** Sora's own voice first, then four more women's. */
+const SCHOLARS = [
+  { id: "Achernar", sex: "Female", name: "Soft and clear", note: "Says it once, and says it right" },
+  ...VOICES.filter((v) => v.sex === "Female"),
+  { id: "Aoede", sex: "Female", name: "Breezy and relaxed", note: "Nothing is ever a problem" },
+  { id: "Zephyr", sex: "Female", name: "Bright and sparkling", note: "A morning person, all day" },
+] as const;
 /** `voice` is what the character sounds like until the home chooses otherwise. */
 export const CHARACTERS = [
   { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", locale: "en-GB", voice: "Enceladus", voices: VOICES },
   { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", locale: "en-US", voice: "Leda", voices: LADIES },
   { id: "otto", name: "Otto", note: "The all-seeing machine. Knows everything, and will remind you.", locale: "en-US", voice: "Charon", voices: VOICES },
   { id: "ernest", name: "Ernest", note: "The nervous one in the box. Scared of his own shadow, bless him.", locale: "en-US", voice: "Fenrir", voices: VOICES },
+  { id: "julian", name: "Julian", note: "The well-read one. Witty, friendly, and has read the manual. All of them.", locale: "en-US", voice: "Sadachbia", voices: GENTS },
+  { id: "sora", name: "Sora", note: "The mathematician in the library. Brilliant, cheerful, always has the answer.", locale: "en-US", voice: "Achernar", voices: SCHOLARS },
 ] as const;
 
 export const VOICE_LANGUAGES = [
