@@ -34,6 +34,7 @@
  *
  * Serves the built app too, when apps/app/dist exists.
  */
+import "./log.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -49,6 +50,7 @@ import { Portraits, pictureType } from "./portraits.ts";
 import { dir as dataDir } from "./store.ts";
 import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
+import { erase, erasePreview, report } from "./upkeep.ts";
 import { store } from "./store.ts";
 import { THEMES, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
@@ -221,7 +223,27 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return json(res, 200, { ok: true });
   }
   if (m === "POST" && path === "/api/lock") { unlocked.delete(key); return json(res, 200, { ok: true }); }
+  // A report is most needed when something is broken, so it does not wait for the hub to be well.
+  if (m === "POST" && path === "/api/report") {
+    const b = await body(req);
+    const text = await report({ ha, devices, media, lists, supervisor, picture: () => portraits.status(), matter, note: String(b.note ?? ""), app: b.app ?? null });
+    console.log("[hub] a report was made");
+    return json(res, 200, { text });
+  }
   if (!ha.connected) return json(res, 503, { error: "The hub is starting. Try again in a moment." });
+
+  // Erasing the home always asks for the PIN itself, even on a device whose settings are open.
+  if (m === "POST" && path === "/api/erase") {
+    const r = pinOk((await body(req)).pin);
+    if (r !== "ok") return pinRefusal(res, r);
+    const left = await erase(ha, media);
+    unlockTimes.clear();
+    json(res, 200, { ok: true, left });
+    changed();
+    // Start again with nothing remembered: on a hub its supervisor restarts this service; a development copy just stops.
+    setTimeout(() => { supervisor("POST", "/addons/self/restart").catch(() => process.exit(0)); }, 800);
+    return;
+  }
 
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
@@ -299,6 +321,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     ...(Array.isArray(b.newRooms) ? b.newRooms.map(String).filter((n: string) => n.trim()).map((n: string) => store.room(n)) : []),
   ];
 
+  if (path === "/api/erase/preview") return json(res, 200, await erasePreview(ha, devices, lists));
   if (path === "/api/software/update") {
     await supervisor("POST", "/store/reload", 60_000).catch(() => {});
     const info = await supervisor("GET", "/addons/self/info");

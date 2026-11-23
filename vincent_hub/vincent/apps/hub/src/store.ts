@@ -47,8 +47,9 @@ interface Saved {
 }
 export interface SavedPlace { zip: string; country: string; place: string; timeZone?: string }
 
-// On the hub an add-on's durable folder is /data.
-export const dir = process.env.SUPERVISOR_TOKEN ? "/data" : fileURLToPath(new URL("../data", import.meta.url));
+// On the hub an add-on's durable folder is /data. In development, VINCENT_DATA names another
+// folder, so a second, empty home can be tried beside the first.
+export const dir = process.env.SUPERVISOR_TOKEN ? "/data" : process.env.VINCENT_DATA ?? fileURLToPath(new URL("../data", import.meta.url));
 const file = join(dir, "vincent.json");
 
 let saved: Saved = { devices: {}, addedEntries: [], reviewed: false };
@@ -103,6 +104,9 @@ export const store = {
     return key;
   },
   paired(key: string): boolean { return !!key && !!saved.paired?.[sha(key)]; },
+  get pairedCount(): number { return Object.keys(saved.paired ?? {}).length; },
+  /** Forgets the home. The hub's own Home Assistant login is kept: that account outlives any one home. */
+  erase(): void { saved = { devices: {}, addedEntries: [], reviewed: false, ...(saved.ha ? { ha: saved.ha } : {}) }; save(); },
   // Rooms
   rooms(): Room[] {
     return (saved.rooms ?? []).map((r) => ({ id: r.id, name: r.name, ...(r.photoAt ? { photo: `/api/rooms/${r.id}/photo?v=${r.photoAt}` } : {}) }));
