@@ -56,6 +56,7 @@ import { Devices } from "./devices.ts";
 import { Media, radio, thumb } from "./media.ts";
 import { Cameras } from "./cameras.ts";
 import { Intercom } from "./intercom.ts";
+import { Talk, TalkRefusal, type TalkDeps } from "./talk.ts";
 import { Place } from "./place.ts";
 import { Lists } from "./lists.ts";
 import { Portraits, pictureType } from "./portraits.ts";
@@ -395,6 +396,26 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     store.setLook(key, look);
     changed();
     return json(res, 200, { ok: true });
+  }
+  // Talking to the host: one reply to what was typed. See talk.ts.
+  if (m === "POST" && path === "/api/talk") {
+    const b = await body(req);
+    const turns = (Array.isArray(b.turns) ? b.turns : []).filter((t: any) => t && (t.role === "you" || t.role === "host") && typeof t.text === "string" && t.text.trim());
+    if (!turns.length || turns[turns.length - 1].role !== "you") return json(res, 400, { error: "Nothing was asked." });
+    const deps: TalkDeps = {
+      house: async () => ({ devices: await devices.all(), rooms: store.rooms(), scenes: store.scenes(), weather: place.weather(), lists: lists.all(), homeName: store.homeName, timeZone: store.place?.timeZone ?? ha.timeZone ?? "" }),
+      control: (r) => devices.control(r),
+      runScene: async (scene, allowed) => { const all = await devices.all(), kind = (id: string) => all.flatMap((d) => d.controls).find((c) => c.id === id)?.kind ?? ""; return scenes.run(scene.steps.filter((st) => allowed(kind(st.id)))); },
+      say,
+    };
+    try {
+      const out = await new Talk(deps).reply(String(b.character ?? mine.character ?? store.character), turns, me);
+      if (out.did.length) changed();
+      return json(res, 200, { ok: true, ...out });
+    } catch (e) {
+      if (e instanceof TalkRefusal) return json(res, e.code === "rule" ? 403 : 503, { code: e.code, error: e.message });
+      throw e;
+    }
   }
   // Colours mixed on the wheel and kept: everyday use, so no PIN.
   if (m === "POST" && path === "/api/colors") {
