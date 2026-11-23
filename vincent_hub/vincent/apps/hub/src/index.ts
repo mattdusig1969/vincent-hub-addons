@@ -611,6 +611,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     }
     if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character)) store.setCharacter(b.character);
     if (["off", "daily", "hourly"].includes(b.rotate)) store.setRotate(b.rotate);
+    if (b.voicesReset === true && Object.keys(store.voices).length) { store.clearVoices(); say("Set every character's voice back to its own"); }
     if (b.voice && typeof b.voice === "object") {
       const who = CHARACTERS.find((c) => c.id === b.voice.character);
       const locale = String(b.voice.locale ?? ""), voice = String(b.voice.voice ?? "");

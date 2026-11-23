@@ -238,6 +238,7 @@ export const store = {
   get rotate(): string { return saved.rotate ?? "off"; },
   setRotate(r: string): void { saved.rotate = r; save(); },
   get voices(): Record<string, { locale: string; voice: string }> { return saved.voices ?? {}; },
+  clearVoices(): void { saved.voices = {}; save(); },
   setVoice(character: string, v: { locale: string; voice: string }): void { saved.voices = { ...saved.voices, [character]: v }; save(); },
   get place(): SavedPlace | undefined { return saved.place; },
   setPlace(p: SavedPlace): void { saved.place = { ...saved.place, ...p }; save(); },
