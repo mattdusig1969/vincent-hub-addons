@@ -178,7 +178,8 @@ export class Devices {
     if (!this.steps) return { ok: false, message: `${dev.maker} needs a step Vincent cannot do yet.` };
     const step = await this.steps(flow.flowId, flow.handler, rooms);
     this.invalidate();
-    if (step.kind === "done") return { ok: true };
+    // Set up, and it brought devices (a Sonos system is several speakers): hand them back so each can be given its room.
+    if (step.kind === "done") return step.brought?.length ? { ok: true, step } : { ok: true };
     if (step.kind === "stopped") return { ok: false, message: step.text };
     return { ok: false, step };
   }
