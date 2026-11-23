@@ -8,6 +8,10 @@
 import type { HA, HaState } from "./ha.ts";
 import { store } from "./store.ts";
 import type { AddResult, Category, Control, ControlRequest, Device, Needs } from "../../../packages/core/src/index.ts";
+import { CLIMATE_MODES } from "../../../packages/core/src/index.ts";
+
+/** Home Assistant's names for a thermostat's modes, and ours. */
+const MODE_OURS: Record<string, string> = { heat: "heat", cool: "cool", heat_cool: "both", auto: "auto", fan_only: "fan", dry: "dry", off: "off" };
 
 /** Entity kinds the app can control, and the category each one puts a device in. */
 const KIND: Record<string, { kind: Control["kind"]; category: Category; rank: number }> = {
@@ -267,6 +271,21 @@ export class Devices {
       case "previous": await call("media_previous_track"); break;
       case "volume": await call("volume_set", { volume_level: clamp(v, 0, 100) / 100 }); break;
       case "target": await call("set_temperature", { temperature: v }); break;
+      case "low": case "high": {
+        // A thermostat keeping a range wants both ends each time; the other end is what it has now.
+        const now = this.ha.states.get(entityId)?.attributes ?? {};
+        const low = req.action === "low" ? v : now.target_temp_low, high = req.action === "high" ? v : now.target_temp_high;
+        if (typeof low !== "number" || typeof high !== "number") throw new Error("That thermostat is not keeping a range right now.");
+        await call("set_temperature", { target_temp_low: Math.min(low, high - 1), target_temp_high: Math.max(high, low + 1) });
+        break;
+      }
+      case "mode": {
+        const theirs = Object.entries(MODE_OURS).find(([, ours]) => ours === req.mode)?.[0];
+        const has = (this.ha.states.get(entityId)?.attributes?.hvac_modes as string[] | undefined) ?? [];
+        if (domain !== "climate" || !theirs || !has.includes(theirs)) throw new Error("That thermostat does not have that mode.");
+        await call("set_hvac_mode", { hvac_mode: theirs });
+        break;
+      }
       case "lock": await call("lock"); break;
       case "unlock": await call("unlock"); break;
       case "open": await call("open_cover"); break;
@@ -368,7 +387,15 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
         groups: sonos,
       };
     }
-    case "climate": return { ...base, kind: "climate", current: a.current_temperature, target: a.temperature, mode: s?.state ?? "off" };
+    case "climate": {
+      const modes = (Array.isArray(a.hvac_modes) ? (a.hvac_modes as string[]) : []).map((m) => MODE_OURS[m]).filter(Boolean);
+      const num = (v: unknown) => (typeof v === "number" ? v : undefined);
+      const doing = ({ heating: "heating", preheating: "heating", cooling: "cooling", fan: "fan", idle: "idle", drying: "drying" } as Record<string, string>)[String(a.hvac_action ?? "")];
+      return {
+        ...base, kind: "climate", current: num(a.current_temperature), target: num(a.temperature), low: num(a.target_temp_low), high: num(a.target_temp_high),
+        mode: MODE_OURS[s?.state ?? ""] ?? "off", modes: CLIMATE_MODES.map((m) => m.id).filter((m) => modes.includes(m)), ...(doing ? { doing } : {}),
+      };
+    }
     case "lock": return { ...base, kind: "lock", locked: s?.state === "locked" };
     case "cover": return { ...base, kind: "cover", open: s?.state !== "closed" };
     // Feature 2 = it can stream. A sleeping battery camera says "idle", never "unavailable".

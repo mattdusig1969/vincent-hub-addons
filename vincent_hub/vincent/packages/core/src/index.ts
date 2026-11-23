@@ -83,7 +83,17 @@ export type Control =
       /** "sonos" = the hub can list this speaker's favourites and playlists. */
       library: "sonos" | "none";
     })
-  | (ControlBase & { kind: "climate"; current?: number; target?: number; mode: string })
+  | (ControlBase & {
+      kind: "climate"; current?: number;
+      /** The temperature it is set to, in heat or cool. In "both" it keeps the room between `low` and `high` instead. */
+      target?: number; low?: number; high?: number;
+      /** What it is set to do: heat · cool · both (heat and cool) · auto · fan · dry · off. */
+      mode: string;
+      /** The modes this thermostat has. */
+      modes?: string[];
+      /** What it is doing this minute: heating · cooling · fan · idle. */
+      doing?: string;
+    })
   | (ControlBase & { kind: "lock"; locked: boolean })
   | (ControlBase & { kind: "cover"; open: boolean })
   | (ControlBase & {
@@ -99,12 +109,20 @@ export type Control =
 export type Action =
   | "on" | "off" | "brightness" | "color" | "white"
   | "play" | "pause" | "volume" | "next" | "previous"
-  | "target"
+  | "target" | "low" | "high" | "mode"
   | "lock" | "unlock"
   | "open" | "close";
 
+/** A thermostat's modes in plain words, in the order they are offered. */
+export const CLIMATE_MODES: { id: string; name: string }[] = [
+  { id: "heat", name: "Heat" }, { id: "cool", name: "Cool" }, { id: "both", name: "Heat and cool" }, { id: "auto", name: "Auto" },
+  { id: "fan", name: "Fan" }, { id: "dry", name: "Dry" }, { id: "off", name: "Off" },
+];
+
 export interface ControlRequest {
   id: string; action: Action; value?: number;
+  /** For a thermostat's "mode": the mode to switch to. */
+  mode?: string;
   /** For a light: the colour (0xRRGGBB) or the white (kelvin) to show. With "color" / "white", or along with "brightness". */
   rgb?: number; kelvin?: number;
   /** For a speaker in a scene: what "play" starts. `value` is then the volume. */
