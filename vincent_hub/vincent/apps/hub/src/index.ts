@@ -35,6 +35,7 @@
  *   POST /api/matter {code}          add a device by its Matter code
  *   POST /api/place {items}          several devices at once: add each to its rooms, or leave it out
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
+ *   GET  /api/intercom/listen?room=  this screen's line for announcements and calls; POST /api/intercom/announce, /call, /call/:id/answer|signal|end; GET /api/intercom/clip/:id
  *
  * Serves the built app too, when apps/app/dist exists.
  */
@@ -49,6 +50,7 @@ import { HA } from "./ha.ts";
 import { Devices } from "./devices.ts";
 import { Media, radio, thumb } from "./media.ts";
 import { Cameras } from "./cameras.ts";
+import { Intercom } from "./intercom.ts";
 import { Place } from "./place.ts";
 import { Lists } from "./lists.ts";
 import { Portraits, pictureType } from "./portraits.ts";
@@ -64,6 +66,7 @@ const ha = new HA();
 const devices = new Devices(ha);
 const media = new Media(ha, devices);
 const cameras = new Cameras(ha, devices);
+const intercom = new Intercom((id) => store.rooms().find((r) => r.id === id)?.name ?? "");
 const place = new Place(ha);
 const lists = new Lists(ha);
 const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
@@ -212,6 +215,41 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const beat = setInterval(() => res.write(": beat\n\n"), 20000);
     req.on("close", () => { clearInterval(beat); streams.delete(res); });
     return;
+  }
+  // Room to room: announcements and calls between this home's screens. See intercom.ts.
+  if (path.startsWith("/api/intercom/")) {
+    const q = new URL(req.url ?? "/", "http://hub").searchParams;
+    if (m === "GET" && path === "/api/intercom/listen") {
+      res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+      const off = intercom.listen(store.device(key)!, q.get("room") ?? "", (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      const beat = setInterval(() => res.write(": beat\n\n"), 20000);
+      req.on("close", () => { clearInterval(beat); off(); });
+      return;
+    }
+    const clip = /^\/api\/intercom\/clip\/([a-f0-9]+)$/.exec(path);
+    if (m === "GET" && clip) {
+      const c = intercom.clip(clip[1]);
+      if (!c) return json(res, 404, { error: "That announcement is gone." });
+      res.writeHead(200, { ...CORS, "Content-Type": c.type, "Cache-Control": "private, max-age=300" });
+      res.end(c.data);
+      return;
+    }
+    if (m !== "POST") return json(res, 404, { error: "not found" });
+    try {
+      if (path === "/api/intercom/announce") {
+        const sound = await raw(req, 3_000_000);
+        if (sound.length < 800) return json(res, 400, { error: "Nothing was recorded." });
+        return json(res, 200, { ok: true, ...intercom.announce(q.get("line") ?? "", (q.get("places") ?? "").split(",").filter(Boolean), sound, String(req.headers["content-type"] ?? "audio/mp4").slice(0, 60), Number(q.get("seconds"))) });
+      }
+      const b = await body(req);
+      if (path === "/api/intercom/call") return json(res, 200, { ok: true, ...intercom.call(String(b.line ?? ""), String(b.place ?? "")) });
+      const on = /^\/api\/intercom\/call\/([a-f0-9]+)\/(answer|signal|end)$/.exec(path);
+      if (on?.[2] === "answer") intercom.answer(String(b.line ?? ""), on[1]);
+      else if (on?.[2] === "signal") intercom.signal(String(b.line ?? ""), on[1], b.data);
+      else if (on?.[2] === "end") intercom.end(on[1], String(b.line ?? ""));
+      else return json(res, 404, { error: "not found" });
+      return json(res, 200, { ok: true });
+    } catch (e) { return json(res, 409, { error: (e as Error).message }); }
   }
   if (m === "POST" && path === "/api/unlock") {
     const r = pinOk((await body(req)).pin);

@@ -110,6 +110,8 @@ export const store = {
     return key;
   },
   paired(key: string): boolean { return !!key && !!saved.paired?.[sha(key)]; },
+  /** The phone or tablet a key belongs to: a short id that never changes, and the name it was given when it joined. */
+  device(key: string): { id: string; name: string } | undefined { const h = sha(key), d = saved.paired?.[h]; return d ? { id: h.slice(0, 16), name: d.name } : undefined; },
   get pairedCount(): number { return Object.keys(saved.paired ?? {}).length; },
   /** Forgets the home. The hub's own Home Assistant login is kept: that account outlives any one home. */
   erase(): void { saved = { devices: {}, addedEntries: [], reviewed: false, ...(saved.ha ? { ha: saved.ha } : {}) }; save(); },
