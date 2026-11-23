@@ -29,6 +29,8 @@ interface Saved {
   scenes?: Scene[];
   /** Suggested scenes the household said no to ("room:idea"). */
   scenesRefused?: string[];
+  /** Colours the household mixed on the wheel and kept, offered on every colour light. */
+  colors?: number[];
   /** scene id -> the home's date it last ran by itself, so a schedule fires once a day even across a restart. */
   scenesRan?: Record<string, string>;
   /** device id -> room ids */
@@ -238,6 +240,9 @@ export const store = {
   get rotate(): string { return saved.rotate ?? "off"; },
   setRotate(r: string): void { saved.rotate = r; save(); },
   get voices(): Record<string, { locale: string; voice: string }> { return saved.voices ?? {}; },
+  get colors(): number[] { return saved.colors ?? []; },
+  keepColor(rgb: number): void { saved.colors = [...(saved.colors ?? []).filter((c) => c !== rgb), rgb].slice(-12); save(); },
+  dropColor(rgb: number): void { saved.colors = (saved.colors ?? []).filter((c) => c !== rgb); save(); },
   clearVoices(): void { saved.voices = {}; save(); },
   setVoice(character: string, v: { locale: string; voice: string }): void { saved.voices = { ...saved.voices, [character]: v }; save(); },
   get place(): SavedPlace | undefined { return saved.place; },

@@ -352,7 +352,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
-      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: store.scenes(), scenesRefused: store.scenesRefused, sun: sunTimes(),
+      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: store.scenes(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   // Scenes are everyday use: anyone in the house runs, makes and changes them.
@@ -611,6 +611,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     }
     if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character)) store.setCharacter(b.character);
     if (["off", "daily", "hourly"].includes(b.rotate)) store.setRotate(b.rotate);
+    if (Number.isInteger(b.colorKeep) && b.colorKeep >= 0 && b.colorKeep <= 0xffffff) { store.keepColor(b.colorKeep); say("Kept a new colour for the lights"); }
+    if (Number.isInteger(b.colorDrop)) store.dropColor(b.colorDrop);
     if (b.voicesReset === true && Object.keys(store.voices).length) { store.clearVoices(); say("Set every character's voice back to its own"); }
     if (b.voice && typeof b.voice === "object") {
       const who = CHARACTERS.find((c) => c.id === b.voice.character);
