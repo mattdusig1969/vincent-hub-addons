@@ -25,6 +25,9 @@
  *   GET  /api/radio?q=|tag=          internet radio stations
  *   GET  /api/thumb/:token           the picture of something to play (only ones the hub listed)
  *   GET  /api/art/:id                cover art of what a player is playing
+ *   GET  /api/cameras/:id/still      a camera's newest picture; POST .../frame (a JPEG) gives it a newer one; GET /api/cameras/ages
+ *   GET  /api/cameras/:id/live       what the player needs; POST {sdp} starts live view -> {session}
+ *   GET  /api/cameras/live/:s/events the handshake's answers; POST .../candidate, .../stop
  *   GET  /api/software               the hub software's version; POST /api/software/update brings the newest
  *   GET  /api/lists/:id              a list's items; POST {op: add|done|reopen|remove|clear, text, item}; POST /api/lists {name} makes one
  *   GET  /api/brands                 brands that can be added by name
@@ -45,6 +48,7 @@ import { extname, join, normalize } from "node:path";
 import { HA } from "./ha.ts";
 import { Devices } from "./devices.ts";
 import { Media, radio, thumb } from "./media.ts";
+import { Cameras } from "./cameras.ts";
 import { Place } from "./place.ts";
 import { Lists } from "./lists.ts";
 import { Portraits, pictureType } from "./portraits.ts";
@@ -59,6 +63,7 @@ const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
 const devices = new Devices(ha);
 const media = new Media(ha, devices);
+const cameras = new Cameras(ha, devices);
 const place = new Place(ha);
 const lists = new Lists(ha);
 const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
@@ -288,6 +293,37 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     res.end(pic.data);
     return;
   }
+  // Cameras: the picture, and live view (the hub carries the handshake; the video goes straight to the app).
+  if (m === "GET" && path === "/api/cameras/ages") return json(res, 200, await cameras.ages());
+  const cam = /^\/api\/cameras\/([^/]+)\/(still|frame|live)$/.exec(path);
+  if (cam && m === "GET" && cam[2] === "still") {
+    const pic = await cameras.still(cam[1]);
+    if (!pic) return json(res, 404, { error: "no picture yet" });
+    res.writeHead(200, { ...CORS, "Content-Type": pic.type, "Cache-Control": "private, max-age=5" });
+    res.end(pic.data);
+    return;
+  }
+  if (cam && m === "POST" && cam[2] === "frame") {
+    const jpeg = await raw(req, 5_000_000);
+    if (jpeg.length < 2000 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return json(res, 400, { error: "That is not a picture." });
+    await cameras.frame(cam[1], jpeg);
+    changed();
+    return json(res, 200, { ok: true });
+  }
+  if (cam && m === "GET" && cam[2] === "live") return json(res, 200, await cameras.config(cam[1]));
+  if (cam && m === "POST" && cam[2] === "live") return json(res, 200, { session: await cameras.start(cam[1], String((await body(req)).sdp ?? "")) });
+  const live = /^\/api\/cameras\/live\/([a-f0-9]+)\/(events|candidate|stop)$/.exec(path);
+  if (live && m === "GET" && live[2] === "events") {
+    res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+    const off = cameras.listen(live[1], (e) => res.write(`data: ${JSON.stringify(e)}\n\n`));
+    if (!off) { res.end(`data: ${JSON.stringify({ type: "end" })}\n\n`); return; }
+    const beat = setInterval(() => res.write(": beat\n\n"), 20000);
+    // The app went away: the camera can go back to sleep.
+    req.on("close", () => { clearInterval(beat); off(); cameras.stop(live[1]); });
+    return;
+  }
+  if (live && m === "POST" && live[2] === "candidate") { cameras.candidate(live[1], await body(req)); return json(res, 200, { ok: true }); }
+  if (live && m === "POST" && live[2] === "stop") { cameras.stop(live[1]); return json(res, 200, { ok: true }); }
   if (m === "GET" && path === "/api/matter") return json(res, 200, matter);
   if (m === "GET" && path === "/api/portraits") return json(res, 200, portraits.status());
   const pic = /^\/api\/portraits\/(photo\/)?([a-z0-9]+)$/.exec(path);

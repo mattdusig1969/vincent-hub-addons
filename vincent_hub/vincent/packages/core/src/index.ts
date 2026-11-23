@@ -78,7 +78,15 @@ export type Control =
   | (ControlBase & { kind: "climate"; current?: number; target?: number; mode: string })
   | (ControlBase & { kind: "lock"; locked: boolean })
   | (ControlBase & { kind: "cover"; open: boolean })
-  | (ControlBase & { kind: "camera" });
+  | (ControlBase & {
+      kind: "camera";
+      /** Address of its newest picture on the hub ("" = none to show). */
+      still: string;
+      /** True when it can be watched live. */
+      live: boolean;
+      /** The last time it saw motion or its button was pressed. */
+      event?: { at: string; kind: "motion" | "ding" };
+    });
 
 export type Action =
   | "on" | "off" | "brightness"

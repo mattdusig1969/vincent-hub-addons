@@ -112,6 +112,14 @@ export class HA {
     await this.call({ type: "subscribe_events", event_type: eventType });
   }
 
+  /** A request that keeps answering (a live-view handshake). Returns how to end it. */
+  async open(msg: Record<string, unknown>, fn: (event: any) => void): Promise<() => void> {
+    const id = this.nextId;
+    this.subs.set(id, fn);
+    try { await this.call(msg); } catch (e) { this.subs.delete(id); throw e; }
+    return () => { if (this.subs.delete(id)) this.call({ type: "unsubscribe_events", subscription: id }).catch(() => {}); };
+  }
+
   call(msg: Record<string, unknown>, timeoutMs = 30000): Promise<any> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("hub not connected"));

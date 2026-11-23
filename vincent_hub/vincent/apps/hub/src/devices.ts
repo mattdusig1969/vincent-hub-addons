@@ -40,7 +40,7 @@ const DISCOVERED = new Set(["zeroconf", "ssdp", "dhcp", "homekit", "bluetooth", 
 interface Snapshot {
   devices: Device[];
   /** control id -> entity id + the device that owns it */
-  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; name?: string }>;
+  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; name?: string; events?: string[]; activity?: string }>;
   /** entity id -> control id, for naming the other players in a group */
   byEntity: Map<string, string>;
   /** device id -> waiting flow */
@@ -72,11 +72,16 @@ export class Devices {
         const ref = this.snap!.controls.get(c.id)!;
         // A control named after its device follows the household's name for that device.
         const own = ref.name ?? (ref.name = c.name);
-        return project(c.id, own === d.makerName ? d.name : own, ref.domain, this.ha.states.get(ref.entityId), ref.integration, this.snap!.byEntity);
+        const now = project(c.id, own === d.makerName ? d.name : own, ref.domain, this.ha.states.get(ref.entityId), ref.integration, this.snap!.byEntity);
+        if (now.kind === "camera") now.event = this.lastEvent(ref);
+        return now;
       });
     }
     return this.snap;
   }
+
+  /** camera entity -> the last motion or ring seen while this service has been running */
+  private seen = new Map<string, { at: string; kind: "motion" | "ding" }>();
 
   /** device id -> the Home Assistant integrations that brought it */
   private entriesOf = new Map<string, string[]>();
@@ -109,7 +114,10 @@ export class Devices {
         const name = e.name || e.original_name || d.name_by_user || d.name || "";
         // The device's own address (a Sonos speaker answers there), never pinned: Home Assistant keeps it current.
         const host = typeof d.configuration_url === "string" ? /\/\/([^:/]+)/.exec(d.configuration_url)?.[1] : undefined;
-        snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host });
+        // A camera's "someone rang" and "something moved" live in entities beside it.
+        const beside = domain === "camera" ? ents.filter((x: any) => x.device_id === d.id && !x.disabled_by).map((x: any) => String(x.entity_id)) : [];
+        snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host,
+          ...(beside.length ? { events: beside.filter((x: string) => /^event\..*_(ding|motion)$/.test(x)), activity: beside.find((x: string) => /^sensor\..*_last_activity$/.test(x)) } : {}) });
         snap.byEntity.set(e.entity_id, e.id);
         controls.push(project(e.id, name, domain, undefined, integration, snap.byEntity));
       }
@@ -276,6 +284,39 @@ export class Devices {
     return ref;
   }
 
+  async camera(controlId: string): Promise<{ entityId: string }> {
+    const snap = await this.snapshot();
+    const ref = snap.controls.get(controlId);
+    const dev = ref && snap.devices.find((d) => d.id === ref.deviceId);
+    if (!ref || !dev || ref.domain !== "camera") throw new Error("unknown camera");
+    if (dev.status !== "added") throw new Error("that device has not been added to Vincent");
+    return ref;
+  }
+  /** Every added camera: control id and entity. */
+  async cameras(): Promise<[string, string][]> {
+    const snap = await this.snapshot();
+    const added = new Set(snap.devices.filter((d) => d.status === "added").map((d) => d.id));
+    return [...snap.controls].filter(([, r]) => r.domain === "camera" && added.has(r.deviceId)).map(([id, r]) => [id, r.entityId]);
+  }
+
+  /**
+   * The last time a camera saw motion or its button was pressed. Two sources, the later wins:
+   * the maker's instant event, and a slower polled "last activity" that keeps up when the instant one stalls.
+   */
+  private lastEvent(ref: { entityId: string; events?: string[]; activity?: string }): { at: string; kind: "motion" | "ding" } | undefined {
+    // Remembered, because the polled source forgets: watching live replaces "motion" there with "on demand".
+    let best = this.seen.get(ref.entityId);
+    const take = (at: unknown, kind: unknown) => {
+      if (typeof at !== "string" || (kind !== "motion" && kind !== "ding") || isNaN(Date.parse(at))) return;
+      if (!best || Date.parse(at) > Date.parse(best.at)) best = { at, kind };
+    };
+    for (const e of ref.events ?? []) take(this.ha.states.get(e)?.state, e.endsWith("_ding") ? "ding" : "motion");
+    const a = ref.activity && this.ha.states.get(ref.activity);
+    if (a) take(a.state, a.attributes?.category);
+    if (best) this.seen.set(ref.entityId, best);
+    return best;
+  }
+
   /** The network address of the device behind an entity, or of any device of one make. */
   async hostOf(entityId: string): Promise<string | undefined> {
     for (const ref of (await this.snapshot()).controls.values()) if (ref.entityId === entityId) return ref.host;
@@ -289,7 +330,7 @@ export class Devices {
   /** Does this entity belong to a device the app shows? Decides whether a change is worth a push. */
   shown(entityId: string): boolean {
     if (!this.snap) return false;
-    for (const ref of this.snap.controls.values()) if (ref.entityId === entityId) return true;
+    for (const ref of this.snap.controls.values()) if (ref.entityId === entityId || ref.activity === entityId || ref.events?.includes(entityId)) return true;
     return false;
   }
 }
@@ -319,7 +360,8 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
     case "climate": return { ...base, kind: "climate", current: a.current_temperature, target: a.temperature, mode: s?.state ?? "off" };
     case "lock": return { ...base, kind: "lock", locked: s?.state === "locked" };
     case "cover": return { ...base, kind: "cover", open: s?.state !== "closed" };
-    case "camera": return { ...base, kind: "camera" };
+    // Feature 2 = it can stream. A sleeping battery camera says "idle", never "unavailable".
+    case "camera": return { ...base, kind: "camera", still: `/api/cameras/${id}/still`, live: (Number(a.supported_features ?? 0) & 2) === 2 };
     default: return { ...base, kind: "switch", on: s?.state === "on" };
   }
 }
