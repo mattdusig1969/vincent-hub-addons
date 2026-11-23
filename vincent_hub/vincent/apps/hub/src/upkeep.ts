@@ -102,6 +102,8 @@ export interface ReportParts {
   supervisor: (method: string, path: string) => Promise<any>;
   picture: () => unknown;
   matter: unknown;
+  /** How Matter itself is on the hub, and what was done to keep it working. */
+  matterCare: { state: string; message: string; lost: boolean; history: string[] } | null;
   note: string;
   /** What the phone or tablet says about itself. */
   app: unknown;
@@ -161,6 +163,13 @@ export async function report(p: ReportParts): Promise<string> {
     out.push(`Spotify: ${short(await safe("Spotify", () => p.media.spotifyStatus().then((s) => ({ linked: s.linked, waitingForSignIn: !!s.signIn }))))}`);
     out.push(`Matter, last code tried: ${short(p.matter)}`);
     out.push(`Pictures: ${short(p.picture(), 700)}`);
+
+    head("Matter on the hub");
+    if (!p.matterCare) out.push("(not looked after on a development copy)");
+    else {
+      out.push(`State: ${p.matterCare.state}${p.matterCare.lost ? " · set up afresh, devices need adding again" : ""}`);
+      out.push(...(p.matterCare.history.length ? p.matterCare.history : ["(nothing has needed doing)"]));
+    }
 
     head("Home Assistant's own warnings and errors");
     const log = await safe("its log", () => p.ha.call({ type: "system_log/list" }) as Promise<any[]>);

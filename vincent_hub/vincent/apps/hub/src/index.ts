@@ -58,6 +58,7 @@ import { dir as dataDir } from "./store.ts";
 import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
 import { erase, erasePreview, report } from "./upkeep.ts";
+import { MatterKeeper } from "./matter.ts";
 import { store } from "./store.ts";
 import { THEMES, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
@@ -78,21 +79,29 @@ devices.steps = async (flowId, handler, rooms) => {
 };
 
 /** On the hub, Vincent runs as an add-on and can ask the hub's supervisor about its own software. */
-async function supervisor(method: string, path: string, timeout = 20_000): Promise<any> {
+async function supervisor(method: string, path: string, timeout = 20_000, data?: unknown): Promise<any> {
   const token = process.env.SUPERVISOR_TOKEN;
+  // A developer's copy can borrow the test hub's supervisor through Home Assistant, to try the Matter keeper.
+  if (!token && process.env.VINCENT_DEV_SUPERVISOR === "1")
+    return ha.call({ type: "supervisor/api", endpoint: path, method: method.toLowerCase(), timeout: Math.round(timeout / 1000), ...(data === undefined ? {} : { data }) }, timeout + 5000);
   if (!token) throw new Error("not on a hub");
-  const r = await fetch(`http://supervisor${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeout) });
+  const r = await fetch(`http://supervisor${path}`, { method, headers: { Authorization: `Bearer ${token}`, ...(data === undefined ? {} : { "Content-Type": "application/json" }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(timeout) });
   const j = (await r.json().catch(() => ({}))) as any;
   if (!r.ok || j.result === "error") throw new Error(j.message ?? `the hub answered ${r.status}`);
   return j.data ?? {};
 }
+/** Looks after Matter on a real hub. A development copy has no supervisor to ask, so it has no keeper. */
+const keeper = process.env.SUPERVISOR_TOKEN || process.env.VINCENT_DEV_SUPERVISOR === "1"
+  ? new MatterKeeper(ha, (method, path, data, timeout) => supervisor(method, path, timeout ?? 60_000, data), { changed: () => changed(), lostFile: join(dataDir, "matter-afresh") })
+  : undefined;
+const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 /** How the last "add by Matter code" went. */
 let matter: { state: "idle" | "working" | "done" | "failed"; message: string; brought?: string[] } = { state: "idle", message: "" };
 
 /** Why a Matter code did not work, in plain words. */
 function matterWhy(m: string): string {
   if (/No commissionable device/i.test(m)) return "No device answered that code. It must be switched on and on your Wi-Fi, and the code freshly made in its maker's app (codes last a few minutes).";
-  if (/unknown command|not loaded|not found/i.test(m)) return "Matter is not ready on this hub yet.";
+  if (/unknown command|not loaded|not found/i.test(m)) return keeper ? "Matter on this hub had stopped. Vincent is putting it right: try your code again in a few minutes." : "Matter is not ready on this hub yet.";
   if (/timeout|did not answer/i.test(m)) return "The device did not answer. It must be switched on, on your Wi-Fi, and its code freshly made in the maker's app.";
   return "That code was not accepted. Codes last only a few minutes: make a new one in the maker's app and try again.";
 }
@@ -125,6 +134,7 @@ ha.onChange = (entityId) => {
 };
 place.onDays = () => changed();
 ha.start();
+keeper?.start();
 
 // The app is not always served from here (the iPhone app carries its own copy), so any origin may ask,
 // but only a paired phone or tablet gets an answer.
@@ -270,7 +280,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // A report is most needed when something is broken, so it does not wait for the hub to be well.
   if (m === "POST" && path === "/api/report") {
     const b = await body(req);
-    const text = await report({ ha, devices, media, lists, supervisor, picture: () => portraits.status(), matter, note: String(b.note ?? ""), app: b.app ?? null });
+    const text = await report({ ha, devices, media, lists, supervisor, picture: () => portraits.status(), matter, matterCare: keeper ? { ...keeper.health(), history: keeper.history() } : null, note: String(b.note ?? ""), app: b.app ?? null });
     console.log("[hub] a report was made");
     return json(res, 200, { text });
   }
@@ -362,7 +372,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   }
   if (live && m === "POST" && live[2] === "candidate") { cameras.candidate(live[1], await body(req)); return json(res, 200, { ok: true }); }
   if (live && m === "POST" && live[2] === "stop") { cameras.stop(live[1]); return json(res, 200, { ok: true }); }
-  if (m === "GET" && path === "/api/matter") return json(res, 200, matter);
+  if (m === "GET" && path === "/api/matter") return json(res, 200, { ...matter, hub: keeper?.health() });
   if (m === "GET" && path === "/api/portraits") return json(res, 200, portraits.status());
   const pic = /^\/api\/portraits\/(photo\/)?([a-z0-9]+)$/.exec(path);
   if (m === "GET" && pic) {
@@ -424,15 +434,34 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (!/^(\d{11}|\d{21}|MT:[A-Z0-9.\-]+)$/i.test(code)) return json(res, 200, { state: "failed", message: "A Matter code is 11 or 21 digits, or the text of its QR code starting with MT:." });
     if (matter.state === "working") return json(res, 200, matter);
     // Looking for the device can take a few minutes, so the app is answered at once and asks how it went.
-    matter = { state: "working", message: "Looking for the device. This can take a couple of minutes." };
+    // If Matter itself has stopped on the hub, it is put right first; the household only waits a little longer.
+    const LOOKING = "Looking for the device. This can take a couple of minutes.";
+    const lostMatter = (e: Error) => /unknown command|not loaded|not found/i.test(e.message);
+    const mend = async () => {
+      matter = { state: "working", message: "Matter on this hub needs a moment first. Vincent is seeing to it, then looks for your device." };
+      changed();
+      if (!(await keeper!.ready(8 * 60_000))) throw new Error("matter-down");
+      matter = { state: "working", message: LOOKING };
+      changed();
+    };
+    const commission = () => ha.call({ type: "matter/commission", code, network_only: true }, 240_000);
+    matter = { state: "working", message: LOOKING };
     const before = new Set(await devices.ids());
-    ha.call({ type: "matter/commission", code, network_only: true }, 240_000)
+    (async () => {
+      const health = keeper?.health().state;
+      if (keeper && health !== "ok" && health !== "off") await mend();
+      // Home Assistant not knowing the word "Matter" means it stopped since the keeper last looked: mend, then try once more.
+      return commission().catch(async (e: Error) => { if (!keeper || !lostMatter(e)) throw e; keeper.nudge(); await sleep(3000); await mend(); return commission(); });
+    })()
       .then(async () => {
         // What the code brought: whatever is on the hub now that was not there before.
         const brought = await devices.settle(async () => (await devices.ids()).filter((id) => !before.has(id)), 20_000);
+        keeper?.added();
         matter = { state: "done", message: brought.length ? "Your hub has it." : "Your hub has it. It appears under Add a device in a moment.", brought };
       })
-      .catch((e: Error) => { matter = { state: "failed", message: matterWhy(e.message) }; })
+      .catch((e: Error) => {
+        matter = { state: "failed", message: e.message === "matter-down" ? keeper!.health().message || matterWhy("not loaded") : matterWhy(e.message) };
+      })
       .finally(changed);
     return json(res, 200, matter);
   }
