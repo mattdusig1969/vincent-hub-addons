@@ -154,7 +154,12 @@ export class Talk {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25_000),
           body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, tools: TOOLS, safetySettings: SAFETY, generationConfig: { temperature: 0.8, maxOutputTokens: 2000 } }),
         });
-      } catch { throw new TalkRefusal("offline", "The internet is offline, so chat cannot work right now."); }
+      } catch (e) {
+        // Too slow is not the same as offline: say which.
+        if ((e as Error).name === "TimeoutError" || (e as Error).name === "AbortError") { console.log("[talk] the service took too long"); throw new TalkRefusal("slow", "Your host took too long to answer. Try again."); }
+        console.log(`[talk] could not reach the service: ${(e as Error).message}`);
+        throw new TalkRefusal("offline", "The hub could not reach the internet, so chat cannot work right now.");
+      }
       const j: any = await r.json().catch(() => ({}));
       if (!r.ok) { console.log(`[talk] service said ${r.status}: ${String(j?.error?.message ?? "").slice(0, 160)}`); throw new TalkRefusal("service", "Your host could not answer just now. Try again in a moment."); }
       const cand = j.candidates?.[0], parts: any[] = cand?.content?.parts ?? [];
@@ -199,7 +204,7 @@ export class Talk {
       const j: any = await r.json().catch(() => ({}));
       if (!r.ok || !j.name) { console.log(`[talk] no pass: ${r.status} ${String(j?.error?.message ?? "").slice(0, 160)}`); throw new TalkRefusal("service", "Your host could not start listening just now. Try again in a moment."); }
       pass = j.name;
-    } catch (e) { if (e instanceof TalkRefusal) throw e; throw new TalkRefusal("offline", "The internet is offline, so chat cannot work right now."); }
+    } catch (e) { if (e instanceof TalkRefusal) throw e; console.log(`[talk] no pass: ${(e as Error).message}`); throw new TalkRefusal("offline", "The hub could not reach the internet, so chat cannot work right now."); }
     const { text: now } = houseNow(await this.deps.house());
     const said = earlier.slice(-12).map((t) => `${t.role === "you" ? "They" : "You"}: ${String(t.text).slice(0, 400)}`).join("\n");
     const system = this.system(character, asker, now, true) + (said ? `\n\nEARLIER IN THIS CONVERSATION (typed)\n${said}` : "");
@@ -246,7 +251,8 @@ export class Talk {
       const found = await this.deps.music(here[0].c.id, query);
       if (!found) return { ok: false, error: `Nothing called "${query}" could be found to play. Suggest they pick it under Media.` };
       this.deps.say(`Played ${found.title} on ${labelOf(here[0].d, here[0].c)}, by asking the host`, "media");
-      return { ok: true, did: `Playing ${found.title} in ${room.name}`, ...({ from: found.from } as object) };
+      const radio = found.from === "internet radio";
+      return { ok: true, did: `Playing ${found.title} in ${room.name}, from ${found.from}`, ...({ from: found.from, ...(radio ? { note: "This is a radio station, so songs cannot be skipped or chosen. Say so in a few words. Connecting Spotify under Media gives albums and artists on demand." } : {}) } as object) };
     }
     if (name !== "control") return { ok: false, error: "No such tool." };
     const at = handles.get(String(args.handle ?? ""));
