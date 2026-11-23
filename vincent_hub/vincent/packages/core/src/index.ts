@@ -392,6 +392,9 @@ export const RULES = [
   { id: "climate", name: "Thermostats", kinds: ["climate"] },
   { id: "locks", name: "Locks", kinds: ["lock"] },
   { id: "doors", name: "Garage doors and shades", kinds: ["cover"] },
+  { id: "announce", name: "Announcements to other rooms", kinds: [] },
+  { id: "call", name: "Video calls between rooms", kinds: [] },
+  { id: "talk", name: "Talking to the host", kinds: [] },
 ] as const;
 export type RuleId = (typeof RULES)[number]["id"];
 export const ruleFor = (kind: string): RuleId | undefined => RULES.find((r) => (r.kinds as readonly string[]).includes(kind))?.id;

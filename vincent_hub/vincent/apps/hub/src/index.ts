@@ -304,6 +304,10 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     }
     if (m !== "POST") return json(res, 404, { error: "not found" });
     try {
+      // The owner's rules: this device may be stopped from announcing, or from starting a call. Answering one is always allowed.
+      const stopped = (rule: string, what: string): boolean => { if (!store.device(key)!.deny.includes(rule)) return false; json(res, 403, { code: "rule", error: `This device is not allowed to ${what}. The home's owner can change that in Settings.` }); return true; };
+      if (path === "/api/intercom/announce" && stopped("announce", "make announcements")) return;
+      if (path === "/api/intercom/call" && stopped("call", "start a call")) return;
       if (path === "/api/intercom/announce") {
         const sound = await raw(req, 3_000_000);
         if (sound.length < 800) return json(res, 400, { error: "Nothing was recorded." });
