@@ -71,7 +71,7 @@ const ha = new HA();
 const devices = new Devices(ha);
 const media = new Media(ha, devices);
 const cameras = new Cameras(ha, devices);
-const scenes = new Scenes(devices);
+const scenes = new Scenes(devices, media);
 const intercom = new Intercom((id) => store.rooms().find((r) => r.id === id)?.name ?? "");
 const place = new Place(ha);
 const lists = new Lists(ha);

@@ -259,7 +259,8 @@ export class Devices {
     switch (req.action) {
       case "on": await call("turn_on", {}, "homeassistant"); break;
       case "off": await call("turn_off", {}, "homeassistant"); break;
-      case "brightness": await call("turn_on", { brightness_pct: clamp(v, 1, 100) }); break;
+      case "brightness": await call("turn_on", { brightness_pct: clamp(v, 1, 100), ...tint(req) }); break;
+      case "color": case "white": if (domain !== "light" || !Object.keys(tint(req)).length) throw new Error("unknown action"); await call("turn_on", tint(req)); break;
       case "play": await call("media_play"); break;
       case "pause": await call("media_pause"); break;
       case "next": await call("media_next_track"); break;
@@ -341,7 +342,17 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
   switch (KIND[domain].kind) {
     case "light": {
       const modes: string[] = a.supported_color_modes ?? [];
-      return { ...base, kind: "light", on: s?.state === "on", dimmable: modes.some((m) => m !== "onoff"), brightness: a.brightness ? Math.round((a.brightness / 255) * 100) : 0 };
+      const isOn = s?.state === "on";
+      const colors = modes.some((m) => ["hs", "rgb", "rgbw", "rgbww", "xy"].includes(m));
+      const lo = Number(a.min_color_temp_kelvin), hi = Number(a.max_color_temp_kelvin);
+      const whites = modes.includes("color_temp") && lo > 0 && hi > lo ? ([lo, hi] as [number, number]) : undefined;
+      const rgb = Array.isArray(a.rgb_color) ? (a.rgb_color[0] << 16) | (a.rgb_color[1] << 8) | a.rgb_color[2] : undefined;
+      // A light showing a white reports that white; one showing a colour reports the colour.
+      const white = isOn && a.color_mode === "color_temp" && a.color_temp_kelvin ? Number(a.color_temp_kelvin) : undefined;
+      return {
+        ...base, kind: "light", on: isOn, dimmable: modes.some((m) => m !== "onoff"), brightness: a.brightness ? Math.round((a.brightness / 255) * 100) : 0,
+        ...(colors ? { colors } : {}), ...(whites ? { whites } : {}), ...(white ? { kelvin: white } : isOn && colors && rgb !== undefined ? { rgb } : {}),
+      };
     }
     case "media": {
       const st = s?.state === "playing" ? "playing" : s?.state === "paused" ? "paused" : s?.state === "off" ? "off" : "idle";
@@ -369,3 +380,10 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
 const hash = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const clamp = (v: number | undefined, lo: number, hi: number) => Math.max(lo, Math.min(hi, Number(v ?? lo)));
 const titled = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** The colour or white a request asks a light for, in Home Assistant's words. Nothing when it asks for neither. */
+function tint(req: ControlRequest): Record<string, unknown> {
+  if (req.kelvin && req.kelvin >= 1500 && req.kelvin <= 9000) return { color_temp_kelvin: Math.round(req.kelvin) };
+  if (typeof req.rgb === "number" && req.rgb >= 0 && req.rgb <= 0xffffff) return { rgb_color: [req.rgb >> 16, (req.rgb >> 8) & 255, req.rgb & 255] };
+  return {};
+}

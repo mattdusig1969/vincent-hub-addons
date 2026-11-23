@@ -4,11 +4,13 @@
  */
 import { randomBytes } from "node:crypto";
 import type { ControlRequest, Device } from "../../../packages/core/src/index.ts";
-import { ROOM_KINDS, SCENE_ICONS, sceneCan, stepNow } from "../../../packages/core/src/index.ts";
+import { ROOM_KINDS, SCENE_ICONS, sceneCan, stepFits, stepNow } from "../../../packages/core/src/index.ts";
 import type { Devices } from "./devices.ts";
+import type { Media } from "./media.ts";
 
 /** What a scene may ask of a control. No "unlock": a scene never opens a door. No thermostats yet. */
-const ALLOWED = new Set(["on", "off", "brightness", "open", "close", "lock"]);
+const ALLOWED = new Set(["on", "off", "brightness", "open", "close", "lock", "play", "pause"]);
+const KINDS = new Set(["favourite", "playlist", "radio", "input", "sxm", "spotify"]);
 const UNDO_FOR = 5 * 60_000;
 
 export const isRoomKind = (k: unknown): boolean => ROOM_KINDS.some((x) => x.id === k);
@@ -21,7 +23,16 @@ export function cleanSteps(raw: unknown): ControlRequest[] {
     const id = String(s?.id ?? ""), action = String(s?.action ?? "");
     if (!id || seen.has(id) || !ALLOWED.has(action)) continue;
     seen.add(id);
-    out.push(action === "brightness" ? { id, action, value: Math.min(100, Math.max(1, Math.round(Number(s.value) || 1))) } : { id, action: action as ControlRequest["action"] });
+    if (action === "brightness") {
+      const kelvin = Number(s.kelvin), rgb = Number(s.rgb);
+      out.push({ id, action, value: Math.min(100, Math.max(1, Math.round(Number(s.value) || 1))), ...(kelvin >= 1500 && kelvin <= 9000 ? { kelvin: Math.round(kelvin) } : s.rgb !== undefined && rgb >= 0 && rgb <= 0xffffff ? { rgb: Math.round(rgb) } : {}) });
+    } else if (action === "play") {
+      // A scene starts something particular; "carry on playing" is only for putting a room back.
+      const item = s.item;
+      if (!item || !KINDS.has(String(item.kind)) || !String(item.id ?? "")) { seen.delete(id); continue; }
+      const volume = Number(s.value);
+      out.push({ id, action, item: { kind: String(item.kind), id: String(item.id).slice(0, 400), title: String(item.title ?? "").slice(0, 80) }, ...(s.value !== undefined && volume >= 0 && volume <= 100 ? { value: Math.round(volume) } : {}) });
+    } else out.push({ id, action: action as ControlRequest["action"] });
     if (out.length >= 200) break;
   }
   return out;
@@ -29,8 +40,9 @@ export function cleanSteps(raw: unknown): ControlRequest[] {
 
 export class Scenes {
   private devices: Devices;
+  private media: Media;
   private undo = new Map<string, { steps: ControlRequest[]; until: number }>();
-  constructor(devices: Devices) { this.devices = devices; }
+  constructor(devices: Devices, media: Media) { this.devices = devices; this.media = media; }
 
   /** Sets everything the steps name. Returns how many did not take, and a ticket to put the room back as it was. */
   async run(steps: ControlRequest[]): Promise<{ done: number; failed: number; undo: string }> {
@@ -61,14 +73,21 @@ export class Scenes {
       for (const d of all) {
         if (d.status !== "added") continue;
         const c = d.controls.find((x) => x.id === step.id);
-        if (c && c.available && sceneCan(c)) out.push({ step, c });
+        if (c && c.available && sceneCan(c) && stepFits(step, c)) out.push({ step, c });
       }
     }
     return out;
   }
 
+  /** One step. A speaker told what to play is set to its volume first, so it never starts too loud. */
+  private async one(s: ControlRequest): Promise<void> {
+    if (s.action !== "play" || !s.item) return this.devices.control(s);
+    if (s.value !== undefined) await this.devices.control({ id: s.id, action: "volume", value: s.value });
+    await this.media.play(s.id, s.item);
+  }
+
   private async send(steps: ControlRequest[]): Promise<number> {
-    const results = await Promise.allSettled(steps.map((s) => this.devices.control(s)));
+    const results = await Promise.allSettled(steps.map((s) => this.one(s)));
     const bad = results.filter((r) => r.status === "rejected");
     if (bad.length) console.log(`[scenes] ${bad.length} of ${steps.length} did not take: ${(bad[0] as PromiseRejectedResult).reason?.message ?? "?"}`);
     return bad.length;

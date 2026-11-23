@@ -79,30 +79,40 @@ const dims = (p: Part) => p.c.kind === "light" && p.c.dimmable;
 /** The small lights that stay on when the big ones go off. */
 const ACCENT = /lamp|sconce|accent|strip|shelf|cabinet|night|bedside|\bled\b|toe.?kick|cove/i;
 
-const on = (p: Part, pct = 100): ControlRequest => (dims(p) ? { id: p.c.id, action: "brightness", value: pct } : { id: p.c.id, action: "on" });
+/** On at a level, and in a white that suits the moment where the light can change its white. */
+const on = (p: Part, pct = 100, kelvin = 0): ControlRequest => {
+  if (!dims(p)) return { id: p.c.id, action: "on" };
+  const w = p.c.kind === "light" && kelvin ? p.c.whites : undefined;
+  return { id: p.c.id, action: "brightness", value: pct, ...(w ? { kelvin: Math.min(w[1], Math.max(w[0], kelvin)) } : {}) };
+};
+/** Music speakers (not televisions): a scene that turns a room off stops them too. */
+const speakers = (parts: Part[]) => parts.filter((p) => p.c.kind === "media" && p.c.library !== "none");
+const hush = (p: Part): ControlRequest => ({ id: p.c.id, action: "pause" });
+const CANDLE = 2200, WARM = 2700, MORNING = 3500, CLEAR = 4000, DAY = 5000;
 const off = (p: Part): ControlRequest => ({ id: p.c.id, action: "off" });
 
-interface Has { lights: Part[]; dim: Part[]; covers: Part[]; locks: Part[] }
+interface Has { lights: Part[]; dim: Part[]; covers: Part[]; locks: Part[]; music: Part[] }
 type Recipe = (h: Has) => ControlRequest[];
 
-const bright: Recipe = (h) => h.lights.map((p) => on(p));
-const allAt = (pct: number): Recipe => (h) => h.lights.map((p) => on(p, pct));
+const brightAt = (kelvin: number): Recipe => (h) => h.lights.map((p) => on(p, 100, kelvin));
+const bright = brightAt(CLEAR);
+const allAt = (pct: number, kelvin = 0): Recipe => (h) => h.lights.map((p) => on(p, pct, kelvin));
 /** Needs a dimmer: the dimmable lights at a level, anything that can only be on or off goes off. */
-const level = (pct: number): Recipe => (h) => (h.dim.length ? h.lights.map((p) => (dims(p) ? on(p, pct) : off(p))) : []);
-const allOff: Recipe = (h) => h.lights.map(off);
+const level = (pct: number, kelvin = WARM): Recipe => (h) => (h.dim.length ? h.lights.map((p) => (dims(p) ? on(p, pct, kelvin) : off(p))) : []);
+const allOff: Recipe = (h) => (h.lights.length ? [...h.lights.map(off), ...h.music.map(hush)] : []);
 const movie: Recipe = (h) => {
   if (!h.dim.length) return [];
   const accents = h.dim.filter((p) => ACCENT.test(p.c.name) || ACCENT.test(p.d.name));
   const few = accents.length > 0 && accents.length < h.lights.length;
-  return [...h.lights.map((p) => (few ? (accents.includes(p) ? on(p, 20) : off(p)) : dims(p) ? on(p, 10) : off(p))), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "close" }))];
+  return [...h.lights.map((p) => (few ? (accents.includes(p) ? on(p, 20, CANDLE) : off(p)) : dims(p) ? on(p, 10, CANDLE) : off(p))), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "close" }))];
 };
 const night: Recipe = (h) => {
   if (!h.dim.length) return [];
   const one = h.dim.find((p) => ACCENT.test(p.c.name) || ACCENT.test(p.d.name)) ?? h.dim[0];
-  return h.lights.map((p) => (p === one ? on(p, 5) : off(p)));
+  return h.lights.map((p) => (p === one ? on(p, 5, CANDLE) : off(p)));
 };
-const morning: Recipe = (h) => [...h.lights.map((p) => on(p, 70)), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "open" }))];
-const sleep: Recipe = (h) => [...h.lights.map(off), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "close" }))];
+const morning: Recipe = (h) => [...h.lights.map((p) => on(p, 70, MORNING)), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "open" }))];
+const sleep: Recipe = (h) => [...h.lights.map(off), ...h.music.map(hush), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "close" }))];
 
 interface Template { id: string; name: string; icon: string; make: Recipe }
 const T = (id: string, name: string, icon: string, make: Recipe): Template => ({ id, name, icon, make });
@@ -111,21 +121,21 @@ const BRIGHT = T("bright", "Bright", "sun", bright), ALL_OFF = T("off", "All off
 const TEMPLATES: Record<RoomKind, Template[]> = {
   living: [MOVIE, T("evening", "Evening", "moon", level(40)), BRIGHT],
   media: [MOVIE, T("intermission", "Intermission", "moon", level(30)), T("up", "Lights up", "sun", bright)],
-  bedroom: [T("wind", "Wind down", "moon", level(20)), T("morning", "Good morning", "sunrise", morning), T("sleep", "Sleep", "bed", sleep)],
-  child: [T("bedtime", "Bedtime", "moon", level(15)), T("nightlight", "Night light", "bed", night), T("morning", "Good morning", "sunrise", morning)],
+  bedroom: [T("wind", "Wind down", "moon", level(20, CANDLE)), T("morning", "Good morning", "sunrise", morning), T("sleep", "Sleep", "bed", sleep)],
+  child: [T("bedtime", "Bedtime", "moon", level(15, CANDLE)), T("nightlight", "Night light", "bed", night), T("morning", "Good morning", "sunrise", morning)],
   kitchen: [T("cooking", "Cooking", "pot", bright), T("snack", "Late snack", "moon", level(15)), ALL_OFF],
   dining: [T("dinner", "Dinner", "fork", level(40)), BRIGHT, ALL_OFF],
-  office: [T("focus", "Focus", "desk", bright), T("call", "Video call", "sun", level(75)), T("done", "Done for the day", "off", allOff)],
+  office: [T("focus", "Focus", "desk", brightAt(DAY)), T("call", "Video call", "sun", level(75, CLEAR)), T("done", "Done for the day", "off", allOff)],
   bathroom: [BRIGHT, T("night", "Night", "moon", night), T("relax", "Relax", "drop", level(30))],
-  entry: [T("welcome", "Welcome", "door", allAt(80)), T("path", "Night path", "moon", level(10)), ALL_OFF],
-  outside: [T("evening", "Evening outside", "leaf", allAt(60)), T("party", "Party", "star", bright), ALL_OFF],
-  utility: [T("working", "Working", "sun", bright), ALL_OFF],
-  play: [T("workout", "Workout", "sun", bright), T("game", "Game night", "star", level(50)), ALL_OFF],
+  entry: [T("welcome", "Welcome", "door", allAt(80, WARM)), T("path", "Night path", "moon", level(10)), ALL_OFF],
+  outside: [T("evening", "Evening outside", "leaf", allAt(60, WARM)), T("party", "Party", "star", bright), ALL_OFF],
+  utility: [T("working", "Working", "sun", brightAt(DAY)), ALL_OFF],
+  play: [T("workout", "Workout", "sun", brightAt(DAY)), T("game", "Game night", "star", level(50)), ALL_OFF],
   other: [BRIGHT, T("dim", "Dim", "moon", level(30)), ALL_OFF],
 };
 
 const same = (a: ControlRequest[], b: ControlRequest[]) => {
-  const key = (s: ControlRequest[]) => s.map((x) => `${x.id}:${x.action}:${x.value ?? ""}`).sort().join("|");
+  const key = (s: ControlRequest[]) => s.map((x) => `${x.id}:${x.action}:${x.value ?? ""}:${x.rgb ?? ""}:${x.kelvin ?? ""}:${x.item?.id ?? ""}`).sort().join("|");
   return key(a) === key(b);
 };
 
@@ -142,7 +152,7 @@ export function sceneIdeas(room: string, rooms: Room[], devices: Device[], scene
     if (here.some((s) => s.name.toLowerCase() === name.toLowerCase() || same(s.steps, steps)) || out.some((o) => same(o.steps, steps))) return;
     out.push({ key, name, room, icon, steps });
   };
-  const has = (parts: Part[]): Has => ({ lights: parts.filter(isLight), dim: parts.filter(dims), covers: parts.filter((p) => p.c.kind === "cover"), locks: parts.filter((p) => p.c.kind === "lock") });
+  const has = (parts: Part[]): Has => ({ lights: parts.filter(isLight), dim: parts.filter(dims), covers: parts.filter((p) => p.c.kind === "cover"), locks: parts.filter((p) => p.c.kind === "lock"), music: speakers(parts) });
 
   if (room !== WHOLE_HOME) {
     const r = rooms.find((x) => x.id === room);
@@ -163,9 +173,9 @@ export function sceneIdeas(room: string, rooms: Room[], devices: Device[], scene
   }
   const lived = inKinds("living", "kitchen");
   if (lived.lights.length || all.covers.length)
-    offer("goodmorning", "Good morning", "sunrise", [...lived.lights.map((p) => on(p, 70)), ...all.covers.map((p): ControlRequest => ({ id: p.c.id, action: "open" }))]);
+    offer("goodmorning", "Good morning", "sunrise", [...lived.lights.map((p) => on(p, 70, MORNING)), ...all.covers.map((p): ControlRequest => ({ id: p.c.id, action: "open" }))]);
   const arriving = inKinds("entry", "living", "kitchen");
-  if (arriving.lights.length >= 2) offer("welcome", "Welcome home", "door", arriving.lights.map((p) => on(p, 80)));
+  if (arriving.lights.length >= 2) offer("welcome", "Welcome home", "door", arriving.lights.map((p) => on(p, 80, WARM)));
   return out;
 }
 
@@ -186,7 +196,9 @@ export function stepWords(step: ControlRequest, devices: Device[]): string {
   switch (step.action) {
     case "off": return `${name} off`;
     case "on": return `${name} on`;
-    case "brightness": return `${name} at ${step.value}%`;
+    case "brightness": { const tint = tintName(step); return `${name} at ${step.value}%${tint ? `, ${tint.toLowerCase()}` : ""}`; }
+    case "pause": return `${name}: music stops`;
+    case "play": return step.item ? `${name} plays ${step.item.title}${step.value !== undefined ? ` at ${step.value}%` : ""}` : `${name} plays`;
     case "open": return `${name} open`;
     case "close": return `${name} closed`;
     case "target": return `${name} to ${step.value}°`;
@@ -201,21 +213,23 @@ export function sceneWords(steps: ControlRequest[], devices: Device[]): string[]
   if (known.length <= 6) return known.map((s) => stepWords(s, devices));
   const n = (test: (s: ControlRequest, p: Part) => boolean) => known.filter((s) => test(s, find(devices, s.id)!)).length;
   const say = (count: number, one: string, many: string, what: string) => (count ? `${count} ${count === 1 ? one : many} ${what}` : "");
-  const lit = (s: ControlRequest, p: Part) => p.c.kind !== "cover" && p.c.kind !== "lock" && p.c.kind !== "climate";
+  const lit = (s: ControlRequest, p: Part) => p.c.kind === "light" || p.c.kind === "switch";
   return [
     say(n((s, p) => lit(s, p) && s.action === "off"), "light", "lights", "off"),
     say(n((s, p) => lit(s, p) && s.action !== "off"), "light", "lights", "on"),
     say(n((s) => s.action === "close"), "shade", "shades", "closed"),
     say(n((s) => s.action === "open"), "shade", "shades", "open"),
     say(n((s) => s.action === "lock"), "door", "doors", "locked"),
-    say(n((s) => s.action === "target"), "thermostat", "thermostats", "set"),
+    say(n((s) => s.action === "pause"), "speaker", "speakers", "stopped"),
+    ...known.filter((s) => s.action === "play").map((s) => stepWords(s, devices)),
   ].filter(Boolean);
 }
 
 /** Is this control already the way the step would leave it? */
 export function stepHolds(step: ControlRequest, c: Control): boolean {
   switch (c.kind) {
-    case "light": return step.action === "off" ? !c.on : step.action === "on" ? c.on : step.action === "brightness" ? c.on && Math.abs(c.brightness - (step.value ?? 0)) <= 3 : false;
+    case "light": return step.action === "off" ? !c.on : step.action === "on" ? c.on : step.action === "brightness" ? c.on && Math.abs(c.brightness - (step.value ?? 0)) <= 3 && tintHolds(step, c) : false;
+    case "media": return step.action === "pause" ? c.state !== "playing" : step.action === "play" ? c.state === "playing" : false;
     case "switch": return step.action === "off" ? !c.on : step.action === "on" ? c.on : false;
     case "cover": return step.action === "open" ? c.open : step.action === "close" ? !c.open : false;
     case "lock": return step.action === "lock" && c.locked;
@@ -236,13 +250,19 @@ export function sceneHolds(scene: Pick<Scene, "steps">, devices: Device[]): bool
   return seen > 0;
 }
 
-/** Can a scene set this control at all? Thermostats, music and cameras are not for scenes (yet). */
-export const sceneCan = (c: Control) => c.kind === "light" || c.kind === "switch" || c.kind === "cover" || c.kind === "lock";
+/** Can a scene set this control at all? Thermostats and cameras are not for scenes (yet). */
+export const sceneCan = (c: Control) => c.kind === "light" || c.kind === "switch" || c.kind === "cover" || c.kind === "lock" || c.kind === "media";
+
+/** What a scene may ask of each kind of thing. No "unlock": a scene never opens a door. */
+const FITS: Record<string, string[]> = { light: ["on", "off", "brightness"], switch: ["on", "off"], cover: ["open", "close"], lock: ["lock"], media: ["play", "pause"] };
+export const stepFits = (step: ControlRequest, c: Control) => (FITS[c.kind] ?? []).includes(step.action);
 
 /** The step that would put this control back the way it is right now. Never an unlock: a scene must not open a door. */
 export function stepNow(c: Control): ControlRequest | undefined {
   switch (c.kind) {
-    case "light": return c.on ? (c.dimmable ? { id: c.id, action: "brightness", value: Math.max(1, Math.round(c.brightness)) } : { id: c.id, action: "on" }) : { id: c.id, action: "off" };
+    case "light": return c.on ? (c.dimmable ? { id: c.id, action: "brightness", value: Math.max(1, Math.round(c.brightness)), ...(c.kelvin ? { kelvin: c.kelvin } : c.rgb !== undefined ? { rgb: c.rgb } : {}) } : { id: c.id, action: "on" }) : { id: c.id, action: "off" };
+    // Enough to put a speaker back: playing again, or quiet. What it was playing cannot be asked for again.
+    case "media": return { id: c.id, action: c.state === "playing" ? "play" : "pause" };
     case "switch": return { id: c.id, action: c.on ? "on" : "off" };
     case "cover": return { id: c.id, action: c.open ? "open" : "close" };
     case "climate": return c.target === undefined ? undefined : { id: c.id, action: "target", value: c.target };
@@ -282,3 +302,32 @@ export const SCENE_ICONS: Record<string, string> = {
   drop: "M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z",
   spark: "M12 3v6M12 15v6M3 12h6M15 12h6M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3",
 };
+
+// Colours and whites a light can be given. A short, named set: easier to choose from than a colour wheel, and a scene can say its name.
+
+export const LIGHT_WHITES: { name: string; kelvin: number }[] = [
+  { name: "Candle", kelvin: 2200 }, { name: "Warm", kelvin: 2700 }, { name: "Soft", kelvin: 3200 }, { name: "Clear", kelvin: 4000 }, { name: "Daylight", kelvin: 5200 },
+];
+export const LIGHT_COLORS: { name: string; rgb: number }[] = [
+  { name: "Red", rgb: 0xff2a1f }, { name: "Orange", rgb: 0xff7a1a }, { name: "Amber", rgb: 0xffb030 }, { name: "Yellow", rgb: 0xffe033 }, { name: "Green", rgb: 0x35d04a },
+  { name: "Teal", rgb: 0x1fd6c0 }, { name: "Blue", rgb: 0x2a6bff }, { name: "Purple", rgb: 0x8a3dff }, { name: "Pink", rgb: 0xff4fb0 },
+];
+const far = (a: number, b: number) => Math.abs((a >> 16) - (b >> 16)) + Math.abs(((a >> 8) & 255) - ((b >> 8) & 255)) + Math.abs((a & 255) - (b & 255));
+/** The nearest named colour or white to what is asked for (or shown). "" when there is none. */
+export function tintName(t: { rgb?: number; kelvin?: number }): string {
+  if (t.kelvin) return LIGHT_WHITES.reduce((best, w) => (Math.abs(w.kelvin - t.kelvin!) < Math.abs(best.kelvin - t.kelvin!) ? w : best)).name;
+  if (t.rgb !== undefined) return LIGHT_COLORS.reduce((best, c) => (far(c.rgb, t.rgb!) < far(best.rgb, t.rgb!) ? c : best)).name;
+  return "";
+}
+/** A white as a colour for the screen, warm to cool. */
+export function whiteRgb(kelvin: number): string {
+  const t = Math.min(1, Math.max(0, (kelvin - 2000) / 4000));
+  return `rgb(255, ${Math.round(170 + 80 * t)}, ${Math.round(90 + 165 * t)})`;
+}
+export const rgbCss = (rgb: number) => `#${rgb.toString(16).padStart(6, "0")}`;
+/** Does the light show the colour or white a step asks for? Lights report back slightly different numbers than they were given. */
+function tintHolds(step: ControlRequest, c: Extract<Control, { kind: "light" }>): boolean {
+  if (step.kelvin) return c.kelvin !== undefined && Math.abs(c.kelvin - step.kelvin) <= 200;
+  if (step.rgb !== undefined) return c.rgb !== undefined && far(c.rgb, step.rgb) <= 90;
+  return true;
+}

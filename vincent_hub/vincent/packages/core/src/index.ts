@@ -60,7 +60,15 @@ interface ControlBase {
 }
 
 export type Control =
-  | (ControlBase & { kind: "light"; on: boolean; dimmable: boolean; brightness: number })
+  | (ControlBase & {
+      kind: "light"; on: boolean; dimmable: boolean; brightness: number;
+      /** True when it can show colours. */
+      colors?: boolean;
+      /** The whites it can show, warmest to coolest, in kelvin. Absent when it has one white only. */
+      whites?: [number, number];
+      /** What it shows now: a colour (0xRRGGBB) or a white (kelvin). Neither when off or not known. */
+      rgb?: number; kelvin?: number;
+    })
   | (ControlBase & { kind: "switch"; on: boolean })
   | (ControlBase & {
       kind: "media"; state: "playing" | "paused" | "idle" | "off"; title?: string; artist?: string; album?: string; volume?: number;
@@ -89,13 +97,19 @@ export type Control =
     });
 
 export type Action =
-  | "on" | "off" | "brightness"
+  | "on" | "off" | "brightness" | "color" | "white"
   | "play" | "pause" | "volume" | "next" | "previous"
   | "target"
   | "lock" | "unlock"
   | "open" | "close";
 
-export interface ControlRequest { id: string; action: Action; value?: number }
+export interface ControlRequest {
+  id: string; action: Action; value?: number;
+  /** For a light: the colour (0xRRGGBB) or the white (kelvin) to show. With "color" / "white", or along with "brightness". */
+  rgb?: number; kelvin?: number;
+  /** For a speaker in a scene: what "play" starts. `value` is then the volume. */
+  item?: { kind: string; id: string; title: string };
+}
 
 /** Something a speaker can be asked to play. */
 export interface MediaItem {
