@@ -3,7 +3,7 @@
  * one is sending them all at once, and "put it back" is sending what was there before.
  */
 import { randomBytes } from "node:crypto";
-import type { ControlRequest, Device } from "../../../packages/core/src/index.ts";
+import type { ControlRequest, Device, SceneWhen } from "../../../packages/core/src/index.ts";
 import { ROOM_KINDS, SCENE_ICONS, sceneCan, stepFits, stepNow } from "../../../packages/core/src/index.ts";
 import type { Devices } from "./devices.ts";
 import type { Media } from "./media.ts";
@@ -15,6 +15,16 @@ const UNDO_FOR = 5 * 60_000;
 
 export const isRoomKind = (k: unknown): boolean => ROOM_KINDS.some((x) => x.id === k);
 export const sceneIcon = (i: unknown): string => (typeof i === "string" && i in SCENE_ICONS ? i : "spark");
+
+/** A schedule as the app sent it, kept only if it makes sense. */
+export function cleanWhen(raw: any): SceneWhen | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const at = raw.at === "sunrise" || raw.at === "sunset" ? raw.at : "time";
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.time)) ? String(raw.time) : "19:00";
+  const days = [...new Set((Array.isArray(raw.days) ? raw.days : []).map(Number).filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6))].sort() as number[];
+  const offset = Math.max(-180, Math.min(180, Math.round(Number(raw.offset) || 0)));
+  return { on: !!raw.on && days.length > 0, at, time, offset, days };
+}
 
 /** Keeps only steps a scene is allowed to hold, one per control. */
 export function cleanSteps(raw: unknown): ControlRequest[] {

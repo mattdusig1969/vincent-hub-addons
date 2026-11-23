@@ -19,7 +19,23 @@ export interface Scene {
   room: string;
   icon: string;
   steps: ControlRequest[];
+  /** When it runs by itself, if it does. */
+  when?: SceneWhen;
 }
+
+/** A scene's schedule: a time of day, or the sun, on chosen days. */
+export interface SceneWhen {
+  on: boolean;
+  at: "time" | "sunrise" | "sunset";
+  /** "HH:MM", 24-hour, for at = "time". */
+  time: string;
+  /** Minutes after (or, negative, before) the sun, for at = "sunrise" / "sunset". */
+  offset: number;
+  /** Days of the week it runs, 0 = Sunday. */
+  days: number[];
+}
+/** The next sunrise and sunset at the home (ISO times). */
+export interface SunTimes { rise: string; set: string }
 
 /** A scene the household has not made yet, offered because the room has what it needs. */
 export interface SceneIdea extends Omit<Scene, "id"> {
@@ -330,4 +346,62 @@ function tintHolds(step: ControlRequest, c: Extract<Control, { kind: "light" }>)
   if (step.kelvin) return c.kelvin !== undefined && Math.abs(c.kelvin - step.kelvin) <= 200;
   if (step.rgb !== undefined) return c.rgb !== undefined && far(c.rgb, step.rgb) <= 90;
   return true;
+}
+
+// Schedules. Worked out here so the hub, the app and the demo home all agree on when a scene is due.
+
+const DAY_MS = 86_400_000;
+/** The home's own clock at a moment: day of the week, minutes since midnight, and the date as a sortable word. */
+function local(at: number, zone: string): { day: number; minutes: number; key: string } {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: zone || undefined, hourCycle: "h23", weekday: "short", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(new Date(at));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return { day: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday")), minutes: Number(get("hour")) * 60 + Number(get("minute")), key: `${get("year")}-${get("month")}-${get("day")}` };
+}
+
+/** The moment a schedule falls on the home's day that holds `at`. Undefined when the sun's times are not known. */
+function dueOn(when: SceneWhen, at: number, zone: string, sun?: SunTimes): number | undefined {
+  const here = local(at, zone);
+  if (when.at === "time") {
+    const [h, m] = when.time.split(":").map(Number);
+    if (!(h >= 0 && h < 24 && m >= 0 && m < 60)) return undefined;
+    return Math.floor(at / 60_000) * 60_000 - (here.minutes - (h * 60 + m)) * 60_000;
+  }
+  let t = Date.parse((when.at === "sunrise" ? sun?.rise : sun?.set) ?? "");
+  if (isNaN(t)) return undefined;
+  // The hub knows the NEXT sunrise and sunset; the same event on another day is within a minute or two of it.
+  for (let i = 0; i < 400 && local(t, zone).key > here.key; i++) t -= DAY_MS;
+  for (let i = 0; i < 400 && local(t, zone).key < here.key; i++) t += DAY_MS;
+  return t + when.offset * 60_000;
+}
+
+/** Is this schedule due right now? True for five minutes from its moment, so a hub that was busy still catches it. */
+export function whenDue(when: SceneWhen | undefined, now: number, zone: string, sun?: SunTimes): boolean {
+  if (!when?.on || !when.days.includes(local(now, zone).day)) return false;
+  const due = dueOn(when, now, zone, sun);
+  return due !== undefined && now >= due && now - due < 5 * 60_000;
+}
+/** The home's date at a moment ("2026-11-22"): a scheduled scene runs once per such day. */
+export const dayKey = (at: number, zone: string) => local(at, zone).key;
+
+/** The next time it will run, for showing. Undefined when it is off, has no days, or the sun is not known. */
+export function whenNext(when: SceneWhen | undefined, now: number, zone: string, sun?: SunTimes): number | undefined {
+  if (!when?.on) return undefined;
+  for (let d = 0; d <= 7; d++) {
+    const due = dueOn(when, now + d * DAY_MS, zone, sun);
+    if (due !== undefined && due > now && when.days.includes(local(due, zone).day)) return due;
+  }
+  return undefined;
+}
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/** A schedule in plain words: "Every day at 10:30 PM", "Weekdays, 30 min before sunset". */
+export function whenWords(when: SceneWhen): string {
+  const d = [...new Set(when.days)].sort();
+  const days = d.length === 7 ? "Every day" : d.join() === "1,2,3,4,5" ? "Weekdays" : d.join() === "0,6" ? "Weekends" : d.map((n) => DAY_NAMES[n]).join(", ");
+  if (when.at === "time") {
+    const [h, m] = when.time.split(":").map(Number);
+    return `${days} at ${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  }
+  const o = Math.abs(when.offset);
+  return `${days}${o ? `, ${o} min ${when.offset < 0 ? "before" : "after"}` : " at"} ${when.at}`;
 }

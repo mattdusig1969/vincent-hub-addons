@@ -62,8 +62,9 @@ import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
 import { erase, erasePreview, report } from "./upkeep.ts";
 import { MatterKeeper } from "./matter.ts";
-import { Scenes, cleanSteps, isRoomKind, sceneIcon } from "./scenes.ts";
+import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
+import { dayKey, whenDue, whenWords, type SunTimes } from "../../../packages/core/src/index.ts";
 import { THEMES, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
@@ -138,6 +139,24 @@ ha.onChange = (entityId) => {
   else if (devices.shown(entityId) || place.shows(entityId) || lists.shows(entityId)) changed();
 };
 place.onDays = () => changed();
+/** The next sunrise and sunset, as Home Assistant works them out from where the home is. */
+function sunTimes(): SunTimes | undefined {
+  const a = ha.states.get("sun.sun")?.attributes;
+  return a?.next_rising && a?.next_setting ? { rise: String(a.next_rising), set: String(a.next_setting) } : undefined;
+}
+// Scenes on a schedule. Looked at twice a minute; each runs once on the home's day it falls due.
+setInterval(() => {
+  if (!ha.connected || !store.setUp) return;
+  const now = Date.now(), zone = store.place?.timeZone || ha.timeZone, today = dayKey(now, zone);
+  for (const s of store.scenes()) {
+    if (!whenDue(s.when, now, zone, sunTimes()) || store.sceneRan(s.id) === today) continue;
+    store.setSceneRan(s.id, today);
+    scenes.run(s.steps)
+      .then((r) => console.log(`[scenes] "${s.name}" ran on its schedule (${whenWords(s.when!)}): ${r.done} set${r.failed ? `, ${r.failed} did not answer` : ""}`))
+      .catch((e: Error) => console.log(`[scenes] "${s.name}" did not run on its schedule: ${e.message}`));
+  }
+}, 30_000);
+
 ha.start();
 keeper?.start();
 
@@ -307,7 +326,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
-      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: store.scenes(), scenesRefused: store.scenesRefused,
+      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: store.scenes(), scenesRefused: store.scenesRefused, sun: sunTimes(),
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   // Scenes are everyday use: anyone in the house runs, makes and changes them.
@@ -326,8 +345,11 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (room && !store.rooms().some((r) => r.id === room)) return json(res, 404, { error: "That room is gone." });
     const steps = cleanSteps(b.steps);
     if (!steps.length) return json(res, 400, { error: "A scene needs at least one thing to set." });
-    const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps });
+    const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps, when: cleanWhen(b.when) });
     if (!id) return json(res, 404, { error: "That scene is gone." });
+    // A schedule set for a moment that has only just passed starts tomorrow; it does not fire the instant it is saved.
+    const zone = store.place?.timeZone || ha.timeZone;
+    if (whenDue(cleanWhen(b.when), Date.now(), zone, sunTimes())) store.setSceneRan(id, dayKey(Date.now(), zone));
     changed();
     return json(res, 200, { ok: true, id });
   }

@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { ControlRequest, ListStatus, Room, RoomKind, Scene } from "../../../packages/core/src/index.ts";
+import type { ControlRequest, ListStatus, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
 
 interface Saved {
   /** device id -> added | ignored. Absent = found. */
@@ -29,6 +29,8 @@ interface Saved {
   scenes?: Scene[];
   /** Suggested scenes the household said no to ("room:idea"). */
   scenesRefused?: string[];
+  /** scene id -> the home's date it last ran by itself, so a schedule fires once a day even across a restart. */
+  scenesRan?: Record<string, string>;
   /** device id -> room ids */
   deviceRooms?: Record<string, string[]>;
   /** device id -> the household's own name for it. The device itself keeps its name. */
@@ -163,9 +165,9 @@ export const store = {
   scenes(): Scene[] { return saved.scenes ?? []; },
   get scenesRefused(): string[] { return saved.scenesRefused ?? []; },
   /** Saves a new scene (no id) or changes one. Returns its id, or "" when the one to change is gone. */
-  saveScene(sc: { id?: string; name: string; room: string; icon: string; steps: ControlRequest[] }): string {
+  saveScene(sc: { id?: string; name: string; room: string; icon: string; steps: ControlRequest[]; when?: SceneWhen }): string {
     const list = (saved.scenes ??= []);
-    const clean = { name: sc.name.trim().slice(0, 30) || "Scene", room: sc.room, icon: sc.icon, steps: sc.steps };
+    const clean = { name: sc.name.trim().slice(0, 30) || "Scene", room: sc.room, icon: sc.icon, steps: sc.steps, ...(sc.when ? { when: sc.when } : {}) };
     if (sc.id) {
       const at = list.findIndex((x) => x.id === sc.id);
       if (at < 0) return "";
@@ -178,6 +180,8 @@ export const store = {
     save();
     return id;
   },
+  sceneRan(id: string): string { return saved.scenesRan?.[id] ?? ""; },
+  setSceneRan(id: string, day: string): void { (saved.scenesRan ??= {})[id] = day; save(); },
   deleteScene(id: string): void { saved.scenes = (saved.scenes ?? []).filter((s) => s.id !== id); save(); },
   refuseScene(key: string): void { const no = (saved.scenesRefused ??= []); if (!no.includes(key)) { no.push(key.slice(0, 60)); save(); } },
   photoFile(id: string): string { return join(dir, "rooms", `${id.replace(/[^a-f0-9]/g, "")}.jpg`); },

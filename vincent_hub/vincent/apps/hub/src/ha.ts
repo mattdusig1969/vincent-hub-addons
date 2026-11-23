@@ -43,6 +43,8 @@ export class HA {
   connected = false;
   version = "";
   homeName = "Home";
+  /** The hub's own time zone ("America/Los_Angeles"). */
+  timeZone = "";
   states = new Map<string, HaState>();
   /** Called with the entity id on every state change, and with "" when a registry changed. */
   onChange: (entityId: string) => void = () => {};
@@ -101,6 +103,7 @@ export class HA {
     this.states = new Map(all.map((s) => [s.entity_id, s]));
     const cfg = await this.call({ type: "get_config" });
     this.homeName = cfg.location_name ?? "Home";
+    this.timeZone = cfg.time_zone ?? "";
     this.connected = true;
     console.log(`[ha] connected: Home Assistant ${this.version}, ${all.length} states`);
     this.onChange("");
