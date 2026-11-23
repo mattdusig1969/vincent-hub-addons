@@ -8,6 +8,9 @@
  *   POST /api/devices/:id/restore    back to found (un-add or un-ignore)
  *   POST /api/reviewed               the first device review is done
  *   POST /api/control                {id, action, value} for an added device
+ *   POST /api/scenes                 {id?, name, room, icon, steps} make or change a scene · /api/scenes/:id/delete
+ *   POST /api/scenes/run             {id} or {steps} -> {done, failed, undo} · /api/scenes/undo {undo} puts it back
+ *   POST /api/scenes/refuse          {key} a suggested scene the household does not want · /api/rooms/:id/kind {kind}
  *   POST /api/setup                  first-time only: owner name + admin PIN -> this device's key
  *   POST /api/pair                   {pin, name} -> a key for another phone or tablet
  *   POST /api/pin                    {pin, newPin} change the admin PIN
@@ -59,6 +62,7 @@ import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
 import { erase, erasePreview, report } from "./upkeep.ts";
 import { MatterKeeper } from "./matter.ts";
+import { Scenes, cleanSteps, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
 import { THEMES, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
@@ -67,6 +71,7 @@ const ha = new HA();
 const devices = new Devices(ha);
 const media = new Media(ha, devices);
 const cameras = new Cameras(ha, devices);
+const scenes = new Scenes(devices);
 const intercom = new Intercom((id) => store.rooms().find((r) => r.id === id)?.name ?? "");
 const place = new Place(ha);
 const lists = new Lists(ha);
@@ -302,9 +307,34 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   // Everyday use: no PIN.
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
-      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key),
+      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: store.scenes(), scenesRefused: store.scenesRefused,
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
+  // Scenes are everyday use: anyone in the house runs, makes and changes them.
+  if (m === "POST" && path === "/api/scenes/run") {
+    const b = await body(req);
+    const steps = b.id ? store.scenes().find((x) => x.id === b.id)?.steps : cleanSteps(b.steps);
+    if (!steps) return json(res, 404, { error: "That scene is gone." });
+    const r = await scenes.run(steps);
+    return json(res, 200, { ok: true, ...r });
+  }
+  if (m === "POST" && path === "/api/scenes/undo") return json(res, 200, { ok: await scenes.back(String((await body(req)).undo ?? "")) });
+  if (m === "POST" && path === "/api/scenes/refuse") { store.refuseScene(String((await body(req)).key ?? "")); changed(); return json(res, 200, { ok: true }); }
+  if (m === "POST" && path === "/api/scenes") {
+    const b = await body(req);
+    const room = String(b.room ?? "");
+    if (room && !store.rooms().some((r) => r.id === room)) return json(res, 404, { error: "That room is gone." });
+    const steps = cleanSteps(b.steps);
+    if (!steps.length) return json(res, 400, { error: "A scene needs at least one thing to set." });
+    const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps });
+    if (!id) return json(res, 404, { error: "That scene is gone." });
+    changed();
+    return json(res, 200, { ok: true, id });
+  }
+  const sceneGone = /^\/api\/scenes\/([a-f0-9]+)\/delete$/.exec(path);
+  if (m === "POST" && sceneGone) { store.deleteScene(sceneGone[1]); changed(); return json(res, 200, { ok: true }); }
+  const kindOf = /^\/api\/rooms\/([a-f0-9]+)\/kind$/.exec(path);
+  if (m === "POST" && kindOf) { const k = (await body(req)).kind; store.setRoomKind(kindOf[1], isRoomKind(k) ? k : undefined); changed(); return json(res, 200, { ok: true }); }
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
   const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm|group)$/.exec(path);
   if (med && m === "POST" && med[2] === "group") { await media.group(med[1], (await body(req)).members); return json(res, 200, { ok: true }); }

@@ -1,0 +1,284 @@
+/**
+ * Scenes: one tap sets several things in a room (or the whole home) the way the household likes them.
+ *
+ * A scene is nothing more than a list of the same requests the app sends when a person
+ * taps a control. This file holds everything both sides need to agree on: what a scene is,
+ * which scenes suit which kind of room, how to say what a scene does in plain words, and
+ * how to tell whether a room is already set the way a scene sets it.
+ * The hub keeps the scenes and runs them; the app (and the demo home) work out the suggestions.
+ */
+import type { Control, ControlRequest, Device, Room } from "./index.ts";
+
+/** A scene's room when it is for the whole home. */
+export const WHOLE_HOME = "";
+
+export interface Scene {
+  id: string;
+  name: string;
+  /** Room id, or WHOLE_HOME. */
+  room: string;
+  icon: string;
+  steps: ControlRequest[];
+}
+
+/** A scene the household has not made yet, offered because the room has what it needs. */
+export interface SceneIdea extends Omit<Scene, "id"> {
+  /** Stays the same for this room and this idea, so "not for this room" can be remembered. */
+  key: string;
+}
+
+export type RoomKind = "living" | "media" | "bedroom" | "child" | "kitchen" | "dining" | "office" | "bathroom" | "entry" | "outside" | "utility" | "play" | "other";
+
+export const ROOM_KINDS: { id: RoomKind; label: string }[] = [
+  { id: "living", label: "Living or family room" },
+  { id: "media", label: "Theater or TV room" },
+  { id: "bedroom", label: "Bedroom" },
+  { id: "child", label: "Child's room" },
+  { id: "kitchen", label: "Kitchen" },
+  { id: "dining", label: "Dining room" },
+  { id: "office", label: "Office or study" },
+  { id: "bathroom", label: "Bathroom" },
+  { id: "entry", label: "Entry, hall or stairs" },
+  { id: "outside", label: "Outside" },
+  { id: "utility", label: "Garage, laundry or basement" },
+  { id: "play", label: "Gym, playroom or bar" },
+  { id: "other", label: "Something else" },
+];
+
+/** The first that matches wins, so the narrower names come before the broader ones ("Kids' Bedroom" is a child's room). */
+const KIND_WORDS: [RoomKind, RegExp][] = [
+  ["media", /theat(er|re)|cinema|media|\btv\b|screening/i],
+  ["child", /kid|child|nursery|\bbaby|boys?'?s? room|girls?'?s? room|bunk|\w['’]s (bed)?room$/i],
+  ["bathroom", /bath|powder|ensuite|en-suite|restroom|toilet|shower/i],
+  ["bedroom", /bed|primary|master|guest|sleep/i],
+  ["kitchen", /kitchen|pantry/i],
+  ["dining", /dining|breakfast|\bnook/i],
+  ["office", /office|study|library|\bdesk/i],
+  ["play", /gym|exercise|workout|play ?room|game|\bbar\b|\brec\b|billiard|pool table/i],
+  ["outside", /patio|deck|porch|yard|garden|\bpool\b|balcony|terrace|outside|outdoor|driveway|lanai|veranda/i],
+  ["utility", /garage|workshop|laundry|basement|attic|closet|utility|storage|cellar|shed/i],
+  ["entry", /entry|foyer|\bhall|stair|mud ?room|front door|landing|vestibule/i],
+  ["living", /living|family|great room|\bden\b|lounge|sitting|parlou?r|salon/i],
+];
+
+/** What kind of room this is: the household's own word for it when they gave one, else a guess from its name. */
+export function roomKind(room: Pick<Room, "name" | "kind">): RoomKind {
+  if (room.kind) return room.kind;
+  for (const [kind, words] of KIND_WORDS) if (words.test(room.name)) return kind;
+  return "other";
+}
+
+// The parts of a room a scene can set
+
+interface Part { c: Control; d: Device }
+const partsOf = (devices: Device[], room: string): Part[] =>
+  devices.filter((d) => d.status === "added" && (room === WHOLE_HOME || d.rooms.includes(room))).flatMap((d) => d.controls.map((c) => ({ c, d })));
+/** A lamp on a smart plug is a light; a plug on anything else (a fridge, a fish tank) is left alone unless the household says so. */
+const isLight = (p: Part) => p.c.kind === "light" || (p.c.kind === "switch" && p.d.category === "lights");
+const dims = (p: Part) => p.c.kind === "light" && p.c.dimmable;
+/** The small lights that stay on when the big ones go off. */
+const ACCENT = /lamp|sconce|accent|strip|shelf|cabinet|night|bedside|\bled\b|toe.?kick|cove/i;
+
+const on = (p: Part, pct = 100): ControlRequest => (dims(p) ? { id: p.c.id, action: "brightness", value: pct } : { id: p.c.id, action: "on" });
+const off = (p: Part): ControlRequest => ({ id: p.c.id, action: "off" });
+
+interface Has { lights: Part[]; dim: Part[]; covers: Part[]; locks: Part[] }
+type Recipe = (h: Has) => ControlRequest[];
+
+const bright: Recipe = (h) => h.lights.map((p) => on(p));
+const allAt = (pct: number): Recipe => (h) => h.lights.map((p) => on(p, pct));
+/** Needs a dimmer: the dimmable lights at a level, anything that can only be on or off goes off. */
+const level = (pct: number): Recipe => (h) => (h.dim.length ? h.lights.map((p) => (dims(p) ? on(p, pct) : off(p))) : []);
+const allOff: Recipe = (h) => h.lights.map(off);
+const movie: Recipe = (h) => {
+  if (!h.dim.length) return [];
+  const accents = h.dim.filter((p) => ACCENT.test(p.c.name) || ACCENT.test(p.d.name));
+  const few = accents.length > 0 && accents.length < h.lights.length;
+  return [...h.lights.map((p) => (few ? (accents.includes(p) ? on(p, 20) : off(p)) : dims(p) ? on(p, 10) : off(p))), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "close" }))];
+};
+const night: Recipe = (h) => {
+  if (!h.dim.length) return [];
+  const one = h.dim.find((p) => ACCENT.test(p.c.name) || ACCENT.test(p.d.name)) ?? h.dim[0];
+  return h.lights.map((p) => (p === one ? on(p, 5) : off(p)));
+};
+const morning: Recipe = (h) => [...h.lights.map((p) => on(p, 70)), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "open" }))];
+const sleep: Recipe = (h) => [...h.lights.map(off), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "close" }))];
+
+interface Template { id: string; name: string; icon: string; make: Recipe }
+const T = (id: string, name: string, icon: string, make: Recipe): Template => ({ id, name, icon, make });
+const BRIGHT = T("bright", "Bright", "sun", bright), ALL_OFF = T("off", "All off", "off", allOff), MOVIE = T("movie", "Movie night", "film", movie);
+
+const TEMPLATES: Record<RoomKind, Template[]> = {
+  living: [MOVIE, T("evening", "Evening", "moon", level(40)), BRIGHT],
+  media: [MOVIE, T("intermission", "Intermission", "moon", level(30)), T("up", "Lights up", "sun", bright)],
+  bedroom: [T("wind", "Wind down", "moon", level(20)), T("morning", "Good morning", "sunrise", morning), T("sleep", "Sleep", "bed", sleep)],
+  child: [T("bedtime", "Bedtime", "moon", level(15)), T("nightlight", "Night light", "bed", night), T("morning", "Good morning", "sunrise", morning)],
+  kitchen: [T("cooking", "Cooking", "pot", bright), T("snack", "Late snack", "moon", level(15)), ALL_OFF],
+  dining: [T("dinner", "Dinner", "fork", level(40)), BRIGHT, ALL_OFF],
+  office: [T("focus", "Focus", "desk", bright), T("call", "Video call", "sun", level(75)), T("done", "Done for the day", "off", allOff)],
+  bathroom: [BRIGHT, T("night", "Night", "moon", night), T("relax", "Relax", "drop", level(30))],
+  entry: [T("welcome", "Welcome", "door", allAt(80)), T("path", "Night path", "moon", level(10)), ALL_OFF],
+  outside: [T("evening", "Evening outside", "leaf", allAt(60)), T("party", "Party", "star", bright), ALL_OFF],
+  utility: [T("working", "Working", "sun", bright), ALL_OFF],
+  play: [T("workout", "Workout", "sun", bright), T("game", "Game night", "star", level(50)), ALL_OFF],
+  other: [BRIGHT, T("dim", "Dim", "moon", level(30)), ALL_OFF],
+};
+
+const same = (a: ControlRequest[], b: ControlRequest[]) => {
+  const key = (s: ControlRequest[]) => s.map((x) => `${x.id}:${x.action}:${x.value ?? ""}`).sort().join("|");
+  return key(a) === key(b);
+};
+
+/**
+ * The scenes worth offering for one room (or WHOLE_HOME), given what is in it.
+ * Never one the household already has, said no to, or that would do the same as another.
+ */
+export function sceneIdeas(room: string, rooms: Room[], devices: Device[], scenes: Scene[], refused: string[], most = room === WHOLE_HOME ? 4 : 3): SceneIdea[] {
+  const here = scenes.filter((s) => s.room === room);
+  const out: SceneIdea[] = [];
+  const offer = (id: string, name: string, icon: string, steps: ControlRequest[]) => {
+    const key = `${room}:${id}`;
+    if (!steps.length || out.length >= most || refused.includes(key)) return;
+    if (here.some((s) => s.name.toLowerCase() === name.toLowerCase() || same(s.steps, steps)) || out.some((o) => same(o.steps, steps))) return;
+    out.push({ key, name, room, icon, steps });
+  };
+  const has = (parts: Part[]): Has => ({ lights: parts.filter(isLight), dim: parts.filter(dims), covers: parts.filter((p) => p.c.kind === "cover"), locks: parts.filter((p) => p.c.kind === "lock") });
+
+  if (room !== WHOLE_HOME) {
+    const r = rooms.find((x) => x.id === room);
+    if (!r) return [];
+    const h = has(partsOf(devices, room));
+    for (const t of TEMPLATES[roomKind(r)]) offer(t.id, t.name, t.icon, t.make(h));
+    return out;
+  }
+
+  const all = has(partsOf(devices, WHOLE_HOME));
+  const inKinds = (...kinds: RoomKind[]) => has(rooms.filter((r) => kinds.includes(roomKind(r))).flatMap((r) => partsOf(devices, r.id)));
+  // A whole-home scene is only worth a button when it saves several taps.
+  if (all.lights.length >= 2 || all.locks.length)
+    offer("goodnight", "Good night", "bed", [...sleep(all), ...all.locks.map((p): ControlRequest => ({ id: p.c.id, action: "lock" }))]);
+  if (all.lights.length >= 2) {
+    offer("alloff", "All off", "off", allOff(all));
+    offer("allon", "All on", "sun", bright(all));
+  }
+  const lived = inKinds("living", "kitchen");
+  if (lived.lights.length || all.covers.length)
+    offer("goodmorning", "Good morning", "sunrise", [...lived.lights.map((p) => on(p, 70)), ...all.covers.map((p): ControlRequest => ({ id: p.c.id, action: "open" }))]);
+  const arriving = inKinds("entry", "living", "kitchen");
+  if (arriving.lights.length >= 2) offer("welcome", "Welcome home", "door", arriving.lights.map((p) => on(p, 80)));
+  return out;
+}
+
+// Reading a scene
+
+const find = (devices: Device[], id: string): Part | undefined => {
+  for (const d of devices) for (const c of d.controls) if (c.id === id) return { c, d };
+  return undefined;
+};
+/** What to call one control in a sentence: its own name, or its device's when the device is just the one thing. */
+export const partName = (p: { c: Control; d: Device }) => (p.d.controls.length === 1 ? p.d.name : p.c.name);
+
+/** One step in plain words: "Reading lamp at 20%". Empty when the control is gone. */
+export function stepWords(step: ControlRequest, devices: Device[]): string {
+  const p = find(devices, step.id);
+  if (!p) return "";
+  const name = partName(p);
+  switch (step.action) {
+    case "off": return `${name} off`;
+    case "on": return `${name} on`;
+    case "brightness": return `${name} at ${step.value}%`;
+    case "open": return `${name} open`;
+    case "close": return `${name} closed`;
+    case "target": return `${name} to ${step.value}°`;
+    case "lock": return `${name} locked`;
+    default: return "";
+  }
+}
+
+/** What a scene does, as a few short lines. A long scene is counted up instead of listed. */
+export function sceneWords(steps: ControlRequest[], devices: Device[]): string[] {
+  const known = steps.filter((s) => find(devices, s.id));
+  if (known.length <= 6) return known.map((s) => stepWords(s, devices));
+  const n = (test: (s: ControlRequest, p: Part) => boolean) => known.filter((s) => test(s, find(devices, s.id)!)).length;
+  const say = (count: number, one: string, many: string, what: string) => (count ? `${count} ${count === 1 ? one : many} ${what}` : "");
+  const lit = (s: ControlRequest, p: Part) => p.c.kind !== "cover" && p.c.kind !== "lock" && p.c.kind !== "climate";
+  return [
+    say(n((s, p) => lit(s, p) && s.action === "off"), "light", "lights", "off"),
+    say(n((s, p) => lit(s, p) && s.action !== "off"), "light", "lights", "on"),
+    say(n((s) => s.action === "close"), "shade", "shades", "closed"),
+    say(n((s) => s.action === "open"), "shade", "shades", "open"),
+    say(n((s) => s.action === "lock"), "door", "doors", "locked"),
+    say(n((s) => s.action === "target"), "thermostat", "thermostats", "set"),
+  ].filter(Boolean);
+}
+
+/** Is this control already the way the step would leave it? */
+export function stepHolds(step: ControlRequest, c: Control): boolean {
+  switch (c.kind) {
+    case "light": return step.action === "off" ? !c.on : step.action === "on" ? c.on : step.action === "brightness" ? c.on && Math.abs(c.brightness - (step.value ?? 0)) <= 3 : false;
+    case "switch": return step.action === "off" ? !c.on : step.action === "on" ? c.on : false;
+    case "cover": return step.action === "open" ? c.open : step.action === "close" ? !c.open : false;
+    case "lock": return step.action === "lock" && c.locked;
+    case "climate": return step.action === "target" && c.target === step.value;
+    default: return false;
+  }
+}
+
+/** True while the room is exactly how the scene sets it (things that are not answering are left out of the count). */
+export function sceneHolds(scene: Pick<Scene, "steps">, devices: Device[]): boolean {
+  let seen = 0;
+  for (const s of scene.steps) {
+    const p = find(devices, s.id);
+    if (!p || !p.c.available) continue;
+    if (!stepHolds(s, p.c)) return false;
+    seen++;
+  }
+  return seen > 0;
+}
+
+/** Can a scene set this control at all? Thermostats, music and cameras are not for scenes (yet). */
+export const sceneCan = (c: Control) => c.kind === "light" || c.kind === "switch" || c.kind === "cover" || c.kind === "lock";
+
+/** The step that would put this control back the way it is right now. Never an unlock: a scene must not open a door. */
+export function stepNow(c: Control): ControlRequest | undefined {
+  switch (c.kind) {
+    case "light": return c.on ? (c.dimmable ? { id: c.id, action: "brightness", value: Math.max(1, Math.round(c.brightness)) } : { id: c.id, action: "on" }) : { id: c.id, action: "off" };
+    case "switch": return { id: c.id, action: c.on ? "on" : "off" };
+    case "cover": return { id: c.id, action: c.open ? "open" : "close" };
+    case "climate": return c.target === undefined ? undefined : { id: c.id, action: "target", value: c.target };
+    case "lock": return c.locked ? { id: c.id, action: "lock" } : undefined;
+    default: return undefined;
+  }
+}
+
+/** Everything in the room a scene could set, in the order the room shows it. */
+export function sceneParts(devices: Device[], room: string): { c: Control; d: Device }[] {
+  return partsOf(devices, room).filter((p) => sceneCan(p.c));
+}
+
+/**
+ * "How the room is now", as a scene. Lights and shades are taken; locks and plugs that are
+ * not lamps are left for the household to switch in, so saving a look never quietly
+ * switches off the fridge.
+ */
+export function roomNow(devices: Device[], room: string): ControlRequest[] {
+  return partsOf(devices, room).filter((p) => p.c.available && (isLight(p) || p.c.kind === "cover")).map((p) => stepNow(p.c)).filter((s): s is ControlRequest => !!s);
+}
+
+/** The drawings a scene's button can wear. */
+export const SCENE_ICONS: Record<string, string> = {
+  sun: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.900 4.900l1.400 1.400M17.700 17.700l1.400 1.400M2 12h2M20 12h2M4.900 19.100l1.400-1.400M17.700 6.300l1.400-1.400",
+  moon: "M20 14.500A8 8 0 0 1 9.500 4a8 8 0 1 0 10.500 10.500z",
+  film: "M4 5h16v14H4zM8 5v14M16 5v14M4 9.500h4M4 14.500h4M16 9.500h4M16 14.500h4",
+  bed: "M3 18v-7a2 2 0 0 1 2-2h9a4 4 0 0 1 4 4v5M3 14h18M21 18v-4M3 9V6",
+  sunrise: "M12 3v5M5.600 9.600l1.400 1.400M18.400 9.600l-1.400 1.400M3 17h18M7 17a5 5 0 0 1 10 0M8 21h8",
+  pot: "M5 10h14v6a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3zM3 10h18M9 6c0-1 1-1 1-2M14 6c0-1 1-1 1-2",
+  fork: "M7 3v7a2 2 0 0 0 4 0V3M9 12v9M17 3c-2 2-2 6 0 8v10",
+  desk: "M3 8h18M5 8v11M19 8v11M5 13h6v6M12 4h6v4h-6z",
+  off: "M12 3v9M6.300 6.300a8 8 0 1 0 11.400 0",
+  door: "M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17M4 21h16M14.500 12v1",
+  leaf: "M5 19c0-8 5-13 14-14 0 9-5 14-13 14zM5 19l7-7",
+  star: "M12 3l2.700 5.600 6.100.800-4.500 4.300 1.100 6.100L12 16.900 6.600 19.800l1.100-6.100L3.200 9.400l6.100-.800z",
+  drop: "M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z",
+  spark: "M12 3v6M12 15v6M3 12h6M15 12h6M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3",
+};

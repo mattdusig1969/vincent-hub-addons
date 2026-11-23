@@ -157,6 +157,8 @@ export interface Software { version: string; latest: string; canUpdate: boolean 
 export interface Room {
   id: string;
   name: string;
+  /** What kind of room it is, when the household said. Otherwise guessed from the name (see roomKind). */
+  kind?: import("./scenes.ts").RoomKind;
   /** Address of the room's photo on the hub (changes when the photo does), if one was taken. */
   photo?: string;
 }
@@ -333,3 +335,5 @@ export interface CustomStyle {
 /** The style whose outfit a character wears in My Home. */
 export const outfitOf = (custom: CustomStyle | undefined, character: string): string => custom?.outfits?.[character] ?? custom?.shape ?? "traditional";
 export const DEFAULT_CUSTOM: CustomStyle = { font: "serif", shape: "traditional" };
+
+export * from "./scenes.ts";

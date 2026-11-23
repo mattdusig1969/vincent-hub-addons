@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { ListStatus, Room } from "../../../packages/core/src/index.ts";
+import type { ControlRequest, ListStatus, Room, RoomKind, Scene } from "../../../packages/core/src/index.ts";
 
 interface Saved {
   /** device id -> added | ignored. Absent = found. */
@@ -24,7 +24,11 @@ interface Saved {
   /** Phones and tablets allowed to talk to this home: sha-256 of each one's key -> its name. */
   paired?: Record<string, { name: string; since: string }>;
   /** Vincent's own rooms. Home Assistant allows one room per device; Vincent allows several. */
-  rooms?: { id: string; name: string; photoAt?: number }[];
+  rooms?: { id: string; name: string; photoAt?: number; kind?: RoomKind }[];
+  /** One-tap scenes, in the order they were made. */
+  scenes?: Scene[];
+  /** Suggested scenes the household said no to ("room:idea"). */
+  scenesRefused?: string[];
   /** device id -> room ids */
   deviceRooms?: Record<string, string[]>;
   /** device id -> the household's own name for it. The device itself keeps its name. */
@@ -117,7 +121,7 @@ export const store = {
   erase(): void { saved = { devices: {}, addedEntries: [], reviewed: false, ...(saved.ha ? { ha: saved.ha } : {}) }; save(); },
   // Rooms
   rooms(): Room[] {
-    return (saved.rooms ?? []).map((r) => ({ id: r.id, name: r.name, ...(r.photoAt ? { photo: `/api/rooms/${r.id}/photo?v=${r.photoAt}` } : {}) }));
+    return (saved.rooms ?? []).map((r) => ({ id: r.id, name: r.name, ...(r.kind ? { kind: r.kind } : {}), ...(r.photoAt ? { photo: `/api/rooms/${r.id}/photo?v=${r.photoAt}` } : {}) }));
   },
   /** Finds the room by name (any capitalisation) or makes it. */
   room(name: string): string {
@@ -143,11 +147,39 @@ export const store = {
   },
   deleteRoom(id: string): void {
     saved.rooms = (saved.rooms ?? []).filter((r) => r.id !== id);
+    saved.scenes = (saved.scenes ?? []).filter((s) => s.room !== id);
     for (const map of [saved.deviceRooms ?? {}, saved.entryRooms ?? {}])
       for (const k of Object.keys(map)) map[k] = map[k].filter((r) => r !== id);
     rmSync(this.photoFile(id), { force: true });
     save();
   },
+  setRoomKind(id: string, kind: RoomKind | undefined): void {
+    const r = saved.rooms?.find((x) => x.id === id);
+    if (!r) return;
+    if (kind) r.kind = kind; else delete r.kind;
+    save();
+  },
+  // Scenes
+  scenes(): Scene[] { return saved.scenes ?? []; },
+  get scenesRefused(): string[] { return saved.scenesRefused ?? []; },
+  /** Saves a new scene (no id) or changes one. Returns its id, or "" when the one to change is gone. */
+  saveScene(sc: { id?: string; name: string; room: string; icon: string; steps: ControlRequest[] }): string {
+    const list = (saved.scenes ??= []);
+    const clean = { name: sc.name.trim().slice(0, 30) || "Scene", room: sc.room, icon: sc.icon, steps: sc.steps };
+    if (sc.id) {
+      const at = list.findIndex((x) => x.id === sc.id);
+      if (at < 0) return "";
+      list[at] = { id: sc.id, ...clean };
+      save();
+      return sc.id;
+    }
+    const id = randomBytes(6).toString("hex");
+    list.push({ id, ...clean });
+    save();
+    return id;
+  },
+  deleteScene(id: string): void { saved.scenes = (saved.scenes ?? []).filter((s) => s.id !== id); save(); },
+  refuseScene(key: string): void { const no = (saved.scenesRefused ??= []); if (!no.includes(key)) { no.push(key.slice(0, 60)); save(); } },
   photoFile(id: string): string { return join(dir, "rooms", `${id.replace(/[^a-f0-9]/g, "")}.jpg`); },
   setPhoto(id: string, jpeg: Buffer): boolean {
     const r = saved.rooms?.find((x) => x.id === id);
