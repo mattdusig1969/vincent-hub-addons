@@ -12,7 +12,9 @@
  *   POST /api/scenes/run             {id} or {steps} -> {done, failed, undo} · /api/scenes/undo {undo} puts it back
  *   POST /api/scenes/refuse          {key} a suggested scene the household does not want · /api/rooms/:id/kind {kind}
  *   POST /api/setup                  first-time only: owner name + admin PIN -> this device's key
- *   POST /api/pair                   {pin, name} -> a key for another phone or tablet
+ *   POST /api/pair                   {pin, name, person} -> a key for another phone or tablet
+ *   GET  /api/changes                who changed what, newest first · GET /api/phones who has joined
+ *   POST /api/phones/me              {name, person} what this device is called and who uses it · /api/phones/:id/remove (PIN)
  *   POST /api/pin                    {pin, newPin} change the admin PIN
  *   POST /api/unlock | /api/lock     {pin} opens settings on this device for ten minutes
  *   POST /api/devices/:id/add|rooms  {rooms, newRooms} choose it / say which rooms it is in (several allowed)
@@ -62,6 +64,7 @@ import { Flows } from "./flows.ts";
 import { brandList } from "./brands.ts";
 import { erase, erasePreview, report } from "./upkeep.ts";
 import { MatterKeeper } from "./matter.ts";
+import { changes } from "./changes.ts";
 import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
 import { dayKey, whenDue, whenWords, type SunTimes } from "../../../packages/core/src/index.ts";
@@ -101,6 +104,8 @@ const keeper = process.env.SUPERVISOR_TOKEN || process.env.VINCENT_DEV_SUPERVISO
   ? new MatterKeeper(ha, (method, path, data, timeout) => supervisor(method, path, timeout ?? 60_000, data), { changed: () => changed(), lostFile: join(dataDir, "matter-afresh") })
   : undefined;
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+/** Which maker each sign-in under way is for, so the change log can name it when it finishes. */
+const addingWhat = new Map<string, string>();
 /** How the last "add by Matter code" went. */
 let matter: { state: "idle" | "working" | "done" | "failed"; message: string; brought?: string[] } = { state: "idle", message: "" };
 
@@ -151,6 +156,7 @@ setInterval(() => {
   for (const s of store.scenes()) {
     if (!whenDue(s.when, now, zone, sunTimes()) || store.sceneRan(s.id) === today) continue;
     store.setSceneRan(s.id, today);
+    changes.add("Vincent", `Ran "${s.name}" on its schedule`);
     scenes.run(s.steps)
       .then((r) => console.log(`[scenes] "${s.name}" ran on its schedule (${whenWords(s.when!)}): ${r.done} set${r.failed ? `, ${r.failed} did not answer` : ""}`))
       .catch((e: Error) => console.log(`[scenes] "${s.name}" did not run on its schedule: ${e.message}`));
@@ -226,7 +232,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = (await body(req)) as SetupRequest;
     if (!b.owner?.trim() || !/^\d{4,8}$/.test(b.pin ?? "")) return json(res, 400, { error: "A name and a PIN of 4 to 8 digits are needed." });
     store.setup(b.owner.trim(), b.pin, b.ha);
-    const key = store.pair(`${b.owner.trim()}'s device`);
+    const key = store.pair(`${b.owner.trim()}'s device`, b.owner.trim());
+    changes.add(b.owner.trim(), "Set up this home");
     unlocked.set(key, Date.now() + UNLOCK_MS); // the first device review follows at once
     return json(res, 200, { ok: true, key });
   }
@@ -235,12 +242,30 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req);
     const r = pinOk(b.pin);
     if (r !== "ok") return pinRefusal(res, r);
-    return json(res, 200, { ok: true, key: store.pair(String(b.name ?? "").trim().slice(0, 40) || "A device") });
+    const name = String(b.name ?? "").trim().slice(0, 40) || "A device", person = String(b.person ?? "").trim().slice(0, 30);
+    changes.add(person ? `${person}, on ${name}` : name, "Joined this home");
+    changed();
+    return json(res, 200, { ok: true, key: store.pair(name, person) });
   }
 
   // Everything below is for paired devices only. (An event stream cannot send a header, so the key may ride in the address.)
   const key = (req.headers.authorization ?? "").replace(/^Bearer /, "") || new URL(req.url ?? "/", "http://hub").searchParams.get("k") || "";
   if (!store.paired(key)) return json(res, 401, { code: "pair", error: "This device has not joined this home." });
+  /** Writes one line in the home's change log, against this phone or tablet (and its person, when it has said who). */
+  const me = store.device(key)!;
+  const say = (what: string) => changes.add(me.person && !me.name.startsWith(me.person) ? `${me.person}, on ${me.name}` : me.name, what);
+  const roomWord = (id: string) => (id ? store.rooms().find((r) => r.id === id)?.name ?? "a room" : "the whole home");
+  const deviceWord = async (id: string) => (await devices.all()).find((d) => d.id === id)?.name ?? "a device";
+  if (m === "GET" && path === "/api/changes") return json(res, 200, { changes: changes.recent() });
+  if (m === "GET" && path === "/api/phones") return json(res, 200, { phones: store.phones().map((p) => ({ ...p, me: p.id === me.id })) });
+  if (m === "POST" && path === "/api/phones/me") {
+    const b = await body(req);
+    store.nameDevice(key, String(b.name ?? ""), String(b.person ?? ""));
+    const now = store.device(key)!;
+    changes.add(now.person ? `${now.person}, on ${now.name}` : now.name, me.name !== now.name ? `Renamed this device from ${me.name}` : "Said who uses this device");
+    changed();
+    return json(res, 200, { ok: true });
+  }
 
   if (m === "GET" && path === "/api/events") {
     res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
@@ -298,6 +323,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (r !== "ok") return pinRefusal(res, r);
     if (!/^\d{4,8}$/.test(String(b.newPin ?? ""))) return json(res, 400, { error: "A PIN is 4 to 8 digits." });
     store.setPin(String(b.newPin));
+    say("Changed the admin PIN");
     return json(res, 200, { ok: true });
   }
   if (m === "POST" && path === "/api/lock") { unlocked.delete(key); return json(res, 200, { ok: true }); }
@@ -347,6 +373,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (!steps.length) return json(res, 400, { error: "A scene needs at least one thing to set." });
     const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps, when: cleanWhen(b.when) });
     if (!id) return json(res, 404, { error: "That scene is gone." });
+    { const sc = store.scenes().find((x) => x.id === id)!; say(`${b.id ? "Changed" : "Made"} the scene "${sc.name}" for ${roomWord(sc.room)}${sc.when?.on ? `. It runs by itself: ${whenWords(sc.when)}` : ""}`); }
     // A schedule set for a moment that has only just passed starts tomorrow; it does not fire the instant it is saved.
     const zone = store.place?.timeZone || ha.timeZone;
     if (whenDue(cleanWhen(b.when), Date.now(), zone, sunTimes())) store.setSceneRan(id, dayKey(Date.now(), zone));
@@ -354,9 +381,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return json(res, 200, { ok: true, id });
   }
   const sceneGone = /^\/api\/scenes\/([a-f0-9]+)\/delete$/.exec(path);
-  if (m === "POST" && sceneGone) { store.deleteScene(sceneGone[1]); changed(); return json(res, 200, { ok: true }); }
+  if (m === "POST" && sceneGone) {
+    const sc = store.scenes().find((x) => x.id === sceneGone[1]);
+    store.deleteScene(sceneGone[1]);
+    if (sc) say(`Deleted the scene "${sc.name}" from ${roomWord(sc.room)}`);
+    changed();
+    return json(res, 200, { ok: true });
+  }
   const kindOf = /^\/api\/rooms\/([a-f0-9]+)\/kind$/.exec(path);
-  if (m === "POST" && kindOf) { const k = (await body(req)).kind; store.setRoomKind(kindOf[1], isRoomKind(k) ? k : undefined); changed(); return json(res, 200, { ok: true }); }
+  if (m === "POST" && kindOf) { const k = (await body(req)).kind; store.setRoomKind(kindOf[1], isRoomKind(k) ? k : undefined); say(`Changed what kind of room ${roomWord(kindOf[1])} is`); changed(); return json(res, 200, { ok: true }); }
   if (m === "POST" && path === "/api/control") { await devices.control(await body(req)); return json(res, 200, { ok: true }); }
   const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm|group)$/.exec(path);
   if (med && m === "POST" && med[2] === "group") { await media.group(med[1], (await body(req)).members); return json(res, 200, { ok: true }); }
@@ -366,7 +399,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   const li = /^\/api\/lists\/([a-f0-9]+)$/.exec(path);
   if (li && m === "GET") return json(res, 200, await lists.items(li[1]));
   if (li && m === "POST") { await lists.change(li[1], await body(req)); changed(); return json(res, 200, { ok: true }); }
-  if (m === "POST" && path === "/api/lists") { await lists.create(String((await body(req)).name ?? "")); devices.invalidate(); changed(); return json(res, 200, { ok: true }); }
+  if (m === "POST" && path === "/api/lists") { const name = String((await body(req)).name ?? ""); await lists.create(name); say(`Made the list "${name.trim().slice(0, 40)}"`); devices.invalidate(); changed(); return json(res, 200, { ok: true }); }
   if (m === "GET" && path === "/api/spotify") return json(res, 200, await media.spotifyStatus());
   if (m === "GET" && path === "/api/spotify/browse") return json(res, 200, { items: await media.spotifyBrowse((new URL(req.url ?? "/", "http://hub").searchParams.get("id") ?? "").slice(0, 300)) });
   if (m === "GET" && path === "/api/spotify/search") {
@@ -467,18 +500,34 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const entity = [...ha.states.values()].find((x) => x.entity_id.startsWith("update.") && x.attributes?.title === info.name)?.entity_id;
     if (!entity) return json(res, 200, { ok: false, message: "The hub could not find Vincent's update. Try again in a few minutes." });
     await ha.service("homeassistant", "update_entity", entity).catch(() => {});
+    say(`Updated Vincent to ${info.version_latest ?? "the newest version"}`);
     json(res, 200, { ok: true, message: "Updating. Vincent will be back in a minute or two." });
     // The update stops this service and starts the new one; nothing after this line is certain to run.
     ha.service("update", "install", entity).catch((e: Error) => console.log(`[hub] update failed: ${e.message}`));
     return;
   }
   // Adding by brand, and answering what a maker asks.
-  if (path === "/api/adding") { const b = await body(req); const step = await flows.startBrand(String(b.brand ?? ""), roomIds(b)); changed(); return json(res, 200, step); }
+  const phoneGone = /^\/api\/phones\/([a-f0-9]+)\/remove$/.exec(path);
+  if (phoneGone) {
+    if (phoneGone[1] === me.id) return json(res, 400, { error: "This is the device you are holding. Use \"Connect to a different hub\" to leave." });
+    const name = store.unpair(phoneGone[1]);
+    if (!name) return json(res, 404, { error: "That device has already left." });
+    say(`Removed ${name} from this home`);
+    return done();
+  }
+  if (path === "/api/adding") {
+    const b = await body(req);
+    const step = await flows.startBrand(String(b.brand ?? ""), roomIds(b));
+    const brand = brandList().find((x) => x.id === b.brand)?.name ?? "a maker";
+    if (step.kind === "done") say(`Connected ${brand}`); else if (step.flow) addingWhat.set(step.flow, brand);
+    changed();
+    return json(res, 200, step);
+  }
   const adding = /^\/api\/adding\/([A-Za-z0-9]+)\/(answer|poll|cancel)$/.exec(path);
   if (adding) {
     if (adding[2] === "cancel") { await flows.cancel(adding[1]); return done(); }
     const step = adding[2] === "poll" ? await flows.poll(adding[1]) : await flows.answer(adding[1], (await body(req)).values ?? {});
-    if (step.kind === "done") changed();
+    if (step.kind === "done") { say(`Connected ${addingWhat.get(adding[1]) ?? "a maker's account"}`); addingWhat.delete(adding[1]); changed(); }
     return json(res, 200, step);
   }
   if (path === "/api/matter") {
@@ -509,6 +558,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
         // What the code brought: whatever is on the hub now that was not there before.
         const brought = await devices.settle(async () => (await devices.ids()).filter((id) => !before.has(id)), 20_000);
         keeper?.added();
+        say("Added a device with a Matter code");
         matter = { state: "done", message: brought.length ? "Your hub has it." : "Your hub has it. It appears under Add a device in a moment.", brought };
       })
       .catch((e: Error) => {
@@ -534,10 +584,19 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   const preset = /^\/api\/portraits\/([a-z]+)\/reset$/.exec(path);
   if (preset) { portraits.reset(preset[1]); return done(); }
   if (path === "/api/spotify/link") return json(res, 200, await media.spotifyLink(changed));
-  if (path === "/api/spotify/forget") { await media.spotifyForget(); return done(); }
+  if (path === "/api/spotify/forget") { await media.spotifyForget(); say("Disconnected Spotify"); return done(); }
   if (path === "/api/reviewed") { store.setReviewed(); return done(); }
   if (path === "/api/home") {
     const b = await body(req);
+    // Only what actually changes is written down.
+    if (typeof b.name === "string" && b.name.trim() && b.name.trim().slice(0, 40) !== store.homeName) say(`Named the home "${b.name.trim().slice(0, 40)}"`);
+    if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme) && b.theme !== store.theme) say(`Changed the colours to ${THEMES.find((t) => t.id === b.theme)!.name}`);
+    if (typeof b.style === "string" && (STYLES.some((t) => t.id === b.style) || b.style === HOME_STYLE.id) && b.style !== store.style) say(`Changed the style to ${STYLES.find((t) => t.id === b.style)?.name ?? "My Home"}`);
+    if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character) && b.character !== store.character) say(`Made ${CHARACTERS.find((c) => c.id === b.character)!.name} the host`);
+    if (["off", "daily", "hourly"].includes(b.rotate) && b.rotate !== store.rotate) say(b.rotate === "off" ? "Chose one host for always" : `Chose a new host each ${b.rotate === "daily" ? "day" : "hour"}`);
+    if (b.voice && typeof b.voice === "object" && CHARACTERS.some((c) => c.id === b.voice.character)) say(`Changed ${CHARACTERS.find((c) => c.id === b.voice.character)!.name}'s voice`);
+    if (typeof b.zip === "string" && b.zip.trim() && b.zip.trim() !== (store.place?.zip ?? "")) say("Changed the home's ZIP code");
+    if (typeof b.contact === "string" && b.contact.trim() && b.contact.trim() !== store.contact) say("Changed how to reach the owner");
     if (typeof b.name === "string" && b.name.trim()) store.setHomeName(b.name);
     if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) store.setTheme(b.theme);
     if (typeof b.style === "string" && (STYLES.some((t) => t.id === b.style) || b.style === HOME_STYLE.id)) store.setStyle(b.style);
@@ -566,16 +625,18 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     }
     return done();
   }
-  if (path === "/api/rooms") { const b = await body(req); const id = store.room(String(b.name ?? "")); changed(); return json(res, 200, { ok: true, id }); }
-  if (path === "/api/rooms/order") { const b = await body(req); store.orderRooms(Array.isArray(b.ids) ? b.ids.map(String) : []); changed(); return json(res, 200, { ok: true }); }
+  if (path === "/api/rooms") { const b = await body(req); const had = store.rooms().length; const id = store.room(String(b.name ?? "")); if (store.rooms().length > had) say(`Made the room ${roomWord(id)}`); changed(); return json(res, 200, { ok: true, id }); }
+  if (path === "/api/rooms/order") { const b = await body(req); store.orderRooms(Array.isArray(b.ids) ? b.ids.map(String) : []); say("Changed the order of the rooms"); changed(); return json(res, 200, { ok: true }); }
   const room = /^\/api\/rooms\/([a-f0-9]+)\/(rename|delete|photo)$/.exec(path);
   if (room) {
-    if (room[2] === "delete") store.deleteRoom(room[1]);
-    else if (room[2] === "rename") store.renameRoom(room[1], String((await body(req)).name ?? ""));
+    const was = roomWord(room[1]);
+    if (room[2] === "delete") { store.deleteRoom(room[1]); say(`Deleted the room ${was}`); }
+    else if (room[2] === "rename") { store.renameRoom(room[1], String((await body(req)).name ?? "")); if (roomWord(room[1]) !== was) say(`Renamed the room ${was} to ${roomWord(room[1])}`); }
     else {
       const jpeg = await raw(req, 4_000_000);
       if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return json(res, 400, { error: "That is not a photo." });
       if (!store.setPhoto(room[1], jpeg)) return json(res, 404, { error: "That room is gone." });
+      say(`Changed the photo of ${was}`);
     }
     return done();
   }
@@ -583,15 +644,18 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req);
     const items = (Array.isArray(b.items) ? b.items : []).slice(0, 200).map((it: any) => ({ id: String(it.id ?? ""), add: !!it.add, rooms: it.add ? roomIds(it) : [] }));
     await devices.place(items);
+    const kept = items.filter((it: { add: boolean }) => it.add).length;
+    if (kept) say(`Gave ${kept === 1 ? "a room to one device" : `rooms to ${kept} devices`}`);
     return done();
   }
   const act = /^\/api\/devices\/([^/]+)\/(add|ignore|restore|rooms|rename)$/.exec(path);
   if (act) {
     const id = decodeURIComponent(act[1]);
-    if (act[2] === "add") { const r = await devices.add(id, roomIds(await body(req))); changed(); return json(res, 200, r); }
-    if (act[2] === "rename") { await devices.rename(id, String((await body(req)).name ?? "")); return done(); }
-    if (act[2] === "rooms") { await devices.setRooms(id, roomIds(await body(req))); return done(); }
+    if (act[2] === "add") { const r = await devices.add(id, roomIds(await body(req))); say(`Added ${await deviceWord(id)}`); changed(); return json(res, 200, r); }
+    if (act[2] === "rename") { const was = await deviceWord(id); await devices.rename(id, String((await body(req)).name ?? "")); const now = await deviceWord(id); if (now !== was) say(`Renamed ${was} to ${now}`); return done(); }
+    if (act[2] === "rooms") { const ids = roomIds(await body(req)); await devices.setRooms(id, ids); say(`Put ${await deviceWord(id)} in ${ids.length ? ids.map(roomWord).join(" and ") : "no room"}`); return done(); }
     await devices.setStatus(id, act[2] === "ignore" ? "ignored" : "found");
+    say(`${act[2] === "ignore" ? "Hid" : "Brought back"} ${await deviceWord(id)}`);
     return done();
   }
   json(res, 404, { error: "not found" });
