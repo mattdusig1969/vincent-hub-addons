@@ -26,6 +26,10 @@ export interface TalkDeps {
 export class TalkRefusal extends Error { code: string; constructor(code: string, message: string) { super(message); this.code = code; } }
 
 const MODEL = process.env.VINCENT_TALK_MODEL || "gemini-3.8-flash";
+/** The model that listens and speaks. */
+const LIVE_MODEL = process.env.VINCENT_TALK_LIVE_MODEL || "gemini-3.8-live";
+/** A handle for a control that stays the same from one look at the house to the next (a spoken conversation looks more than once). */
+const handleOf = (id: string) => { let h = 5381; for (let i = 0; i < id.length; i++) h = ((h * 33) ^ id.charCodeAt(i)) >>> 0; return `c${h.toString(36).slice(0, 5)}`; };
 
 /** Who each host is, for the service that writes their words. The app's own lines (Host.tsx, the tour) set the tone these follow. */
 const MANNER: Record<string, string> = {
@@ -78,10 +82,10 @@ function stateOf(c: Control): string {
 function houseNow(h: TalkHouse): { text: string; handles: Map<string, { d: Device; c: Control }> } {
   const handles = new Map<string, { d: Device; c: Control }>();
   const lines: string[] = [];
-  let n = 0;
   for (const d of h.devices.filter((x) => x.status === "added")) for (const c of d.controls) {
     if (c.kind === "camera" || !c.available) continue;
-    const handle = `c${++n}`;
+    let handle = handleOf(c.id);
+    while (handles.has(handle)) handle += "x";
     handles.set(handle, { d, c });
     lines.push(`[${handle}] ${labelOf(d, c)} (${c.kind}, in ${roomsOf(d, h.rooms)}): ${stateOf(c)}`);
   }
@@ -130,10 +134,9 @@ export class Talk {
     if (asker.deny.includes("talk")) throw new TalkRefusal("rule", "This device is not allowed to talk to the host. The home's owner can change that in Settings.");
     const key = this.key();
     if (!key) throw new TalkRefusal("off", "Talking to your host is not switched on for this hub yet.");
-    const who = CHARACTERS.find((c) => c.id === character) ?? CHARACTERS[0];
     const house = await this.deps.house(), { text: now, handles } = houseNow(house);
     const barred = (kind: string) => { const rule = ruleFor(kind); return !!rule && asker.deny.includes(rule); };
-    const system = `${RULES_OF_THE_HOUSE}\n\nYOUR CHARACTER\nYou are ${MANNER[who.id] ?? MANNER.vincent}\n\nWHO YOU ARE TALKING TO\n${asker.person ? `${asker.person}, on ${asker.name}.` : `Someone on ${asker.name}.`}${asker.deny.length ? ` The home's owner has not allowed this device to control: ${asker.deny.map((d) => RULES.find((r) => r.id === d)?.name.toLowerCase()).filter(Boolean).join(", ")}.` : ""}\n\nTHE HOUSE NOW\n${now}`;
+    const system = this.system(character, asker, now);
     const contents: any[] = turns.slice(-16).map((t) => ({ role: t.role === "you" ? "user" : "model", parts: [{ text: String(t.text).slice(0, 1200) }] }));
     const did: string[] = [];
 
@@ -165,6 +168,53 @@ export class Talk {
       contents.push({ role: "user", parts: answers });
     }
     return { text: "That took more steps than I can manage in one go. Ask me for one thing at a time.", did };
+  }
+
+  /** Everything the host is told before a conversation: the rules, who they are, who is asking, and the house. */
+  private system(character: string, asker: TalkAsker, now: string, spoken = false): string {
+    const who = CHARACTERS.find((c) => c.id === character) ?? CHARACTERS[0];
+    return `${RULES_OF_THE_HOUSE}${spoken ? "\n\nYou are SPEAKING aloud in this conversation, and being spoken to. Keep answers to a sentence or two, said the way your character would say them. THE HOUSE NOW was written when the conversation began: before answering anything about the state of the house later on, call look_at_house for the state this minute." : ""}\n\nYOUR CHARACTER\nYou are ${MANNER[who.id] ?? MANNER.vincent}\n\nWHO YOU ARE TALKING TO\n${asker.person ? `${asker.person}, on ${asker.name}.` : `Someone on ${asker.name}.`}${asker.deny.length ? ` The home's owner has not allowed this device to control: ${asker.deny.map((d) => RULES.find((r) => r.id === d)?.name.toLowerCase()).filter(Boolean).join(", ")}.` : ""}\n\nTHE HOUSE NOW\n${now}`;
+  }
+
+  /**
+   * A spoken conversation: a short pass for Google's live service, and how the app should open it.
+   * The app talks to the service directly (sound should not take a detour through the hub); the key never leaves the hub.
+   * What the host is asked to do comes back here, to `actFor`, and is checked like everything else.
+   */
+  async live(character: string, voice: { locale: string; voice: string }, earlier: TalkTurn[], asker: TalkAsker): Promise<{ url: string; setup: unknown }> {
+    if (asker.deny.includes("talk")) throw new TalkRefusal("rule", "This device is not allowed to talk to the host. The home's owner can change that in Settings.");
+    const key = this.key();
+    if (!key) throw new TalkRefusal("off", "Talking to your host is not switched on for this hub yet.");
+    let pass = "";
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1alpha/auth_tokens?key=${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(12_000),
+        body: JSON.stringify({ uses: 1, expireTime: new Date(Date.now() + 30 * 60_000).toISOString(), newSessionExpireTime: new Date(Date.now() + 2 * 60_000).toISOString() }) });
+      const j: any = await r.json().catch(() => ({}));
+      if (!r.ok || !j.name) { console.log(`[talk] no pass: ${r.status} ${String(j?.error?.message ?? "").slice(0, 160)}`); throw new TalkRefusal("service", "Your host could not start listening just now. Try again in a moment."); }
+      pass = j.name;
+    } catch (e) { if (e instanceof TalkRefusal) throw e; throw new TalkRefusal("offline", "The internet is offline, so chat cannot work right now."); }
+    const { text: now } = houseNow(await this.deps.house());
+    const said = earlier.slice(-12).map((t) => `${t.role === "you" ? "They" : "You"}: ${String(t.text).slice(0, 400)}`).join("\n");
+    const system = this.system(character, asker, now, true) + (said ? `\n\nEARLIER IN THIS CONVERSATION (typed)\n${said}` : "");
+    return {
+      url: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(pass)}`,
+      setup: {
+        model: `models/${LIVE_MODEL}`,
+        generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice.voice } }, languageCode: voice.locale } },
+        systemInstruction: { parts: [{ text: system }] },
+        tools: [{ functionDeclarations: [...TOOLS[0].functionDeclarations, { name: "look_at_house", description: "The state of the whole house this minute: every device, what is playing, the weather. Call before answering about the house." }] }],
+        inputAudioTranscription: {}, outputAudioTranscription: {},
+      },
+    };
+  }
+
+  /** One thing the host asked for during a spoken conversation, checked and done here. */
+  async actFor(name: string, args: any, asker: TalkAsker): Promise<{ ok: boolean; did?: string; error?: string; house?: string }> {
+    if (asker.deny.includes("talk")) return { ok: false, error: "This device is not allowed to talk to the host." };
+    const house = await this.deps.house(), { text, handles } = houseNow(house);
+    if (name === "look_at_house") return { ok: true, house: text };
+    const barred = (kind: string) => { const rule = ruleFor(kind); return !!rule && asker.deny.includes(rule); };
+    return this.act(name, args ?? {}, handles, house, barred).catch((e: Error) => ({ ok: false, error: e.message }));
   }
 
   private async act(name: string, args: any, handles: Map<string, { d: Device; c: Control }>, house: TalkHouse, barred: (kind: string) => boolean): Promise<{ ok: boolean; did?: string; error?: string }> {

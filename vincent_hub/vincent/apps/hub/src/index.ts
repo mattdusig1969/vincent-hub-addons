@@ -397,19 +397,32 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     changed();
     return json(res, 200, { ok: true });
   }
-  // Talking to the host: one reply to what was typed. See talk.ts.
-  if (m === "POST" && path === "/api/talk") {
+  // Talking to the host. See talk.ts.
+  if (m === "POST" && (path === "/api/talk" || path === "/api/talk/live" || path === "/api/talk/act")) {
     const b = await body(req);
-    const turns = (Array.isArray(b.turns) ? b.turns : []).filter((t: any) => t && (t.role === "you" || t.role === "host") && typeof t.text === "string" && t.text.trim());
-    if (!turns.length || turns[turns.length - 1].role !== "you") return json(res, 400, { error: "Nothing was asked." });
     const deps: TalkDeps = {
       house: async () => ({ devices: await devices.all(), rooms: store.rooms(), scenes: store.scenes(), weather: place.weather(), lists: lists.all(), homeName: store.homeName, timeZone: store.place?.timeZone ?? ha.timeZone ?? "" }),
       control: (r) => devices.control(r),
       runScene: async (scene, allowed) => { const all = await devices.all(), kind = (id: string) => all.flatMap((d) => d.controls).find((c) => c.id === id)?.kind ?? ""; return scenes.run(scene.steps.filter((st) => allowed(kind(st.id)))); },
       say,
     };
+    const talk = new Talk(deps), who = String(b.character ?? mine.character ?? store.character);
+    const earlier = (Array.isArray(b.turns) ? b.turns : []).filter((t: any) => t && (t.role === "you" || t.role === "host") && typeof t.text === "string" && t.text.trim());
     try {
-      const out = await new Talk(deps).reply(String(b.character ?? mine.character ?? store.character), turns, me);
+      // Speaking: a short pass for the live service, opened by the app itself.
+      if (path === "/api/talk/live") {
+        const c = CHARACTERS.find((x) => x.id === who) ?? CHARACTERS[0], v = mine.voices?.[c.id] ?? store.voices[c.id];
+        return json(res, 200, { ok: true, ...(await talk.live(c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id), earlier, me)) });
+      }
+      if (path === "/api/talk/act") { const out = await talk.actFor(String(b.name ?? ""), b.args, me); if (out.did) changed(); return json(res, 200, out); }
+    } catch (e) {
+      if (e instanceof TalkRefusal) return json(res, e.code === "rule" ? 403 : 503, { code: e.code, error: e.message });
+      throw e;
+    }
+    const turns = earlier;
+    if (!turns.length || turns[turns.length - 1].role !== "you") return json(res, 400, { error: "Nothing was asked." });
+    try {
+      const out = await talk.reply(who, turns, me);
       if (out.did.length) changed();
       return json(res, 200, { ok: true, ...out });
     } catch (e) {
