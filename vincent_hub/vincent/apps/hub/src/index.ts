@@ -232,7 +232,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = (await body(req)) as SetupRequest;
     if (!b.owner?.trim() || !/^\d{4,8}$/.test(b.pin ?? "")) return json(res, 400, { error: "A name and a PIN of 4 to 8 digits are needed." });
     store.setup(b.owner.trim(), b.pin, b.ha);
-    const key = store.pair(`${b.owner.trim()}'s device`, b.owner.trim());
+    const key = store.pair(`${b.owner.trim()}'s device`, b.owner.trim(), [], true);
     changes.add(b.owner.trim(), "Set up this home");
     unlocked.set(key, Date.now() + UNLOCK_MS); // the first device review follows at once
     return json(res, 200, { ok: true, key });
@@ -359,11 +359,47 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   }
 
   // Everyday use: no PIN.
+  // The look this device shows: the home's, with whatever this device chose for itself laid over it.
+  const mine = store.lookOf(key);
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
-      devices: await devices.all(), rooms: store.rooms(), theme: store.theme, style: store.style, custom: store.custom, rotate: store.rotate, character: store.character, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: store.scenes(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
+      devices: await devices.all(), rooms: store.rooms(), theme: mine.theme ?? store.theme, style: mine.style ?? store.style, custom: mine.custom ?? store.custom, rotate: mine.rotate ?? store.rotate, character: mine.character ?? store.character, look: { owner: store.isOwner(key), own: Object.keys(mine).length > 0 }, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = mine.voices?.[c.id] ?? store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: store.scenes(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
       weather: place.weather(), lists: lists.all(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
+  // A device's own look. The home's look belongs to the owner's device (set in /api/home, with the PIN); every other
+  // phone or tablet starts on it, and may change its own without a PIN. What it never changed keeps following the home.
+  if (m === "POST" && path === "/api/look") {
+    const b = await body(req);
+    if (b.reset === true) { store.setLook(key, null); changed(); return json(res, 200, { ok: true }); }
+    const look = { ...mine };
+    if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) look.theme = b.theme;
+    if (typeof b.style === "string" && (STYLES.some((t) => t.id === b.style) || b.style === HOME_STYLE.id)) look.style = b.style;
+    if (b.custom && typeof b.custom === "object") {
+      const base = look.custom ?? store.custom;
+      const outfits: Record<string, string> = { ...base.outfits };
+      if (b.custom.outfits && typeof b.custom.outfits === "object")
+        for (const [who, wear] of Object.entries(b.custom.outfits)) if (CHARACTERS.some((c) => c.id === who) && STYLES.some((t) => t.id === wear)) outfits[who] = String(wear);
+      look.custom = { font: FONTS.some((f) => f.id === b.custom.font) ? String(b.custom.font) : base.font, shape: STYLES.some((t) => t.id === b.custom.shape) ? String(b.custom.shape) : base.shape, outfits };
+    }
+    if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character)) look.character = b.character;
+    if (["off", "daily", "hourly"].includes(b.rotate)) look.rotate = b.rotate;
+    if (b.voicesReset === true) delete look.voices;
+    if (b.voice && typeof b.voice === "object") {
+      const who = CHARACTERS.find((c) => c.id === b.voice.character), locale = String(b.voice.locale ?? ""), voice = String(b.voice.voice ?? "");
+      if (who && VOICE_LANGUAGES.some((l) => l.accents.some((a) => a.id === locale)) && who.voices.some((v) => v.id === voice)) look.voices = { ...look.voices, [who.id]: { locale, voice } };
+    }
+    store.setLook(key, look);
+    changed();
+    return json(res, 200, { ok: true });
+  }
+  // Colours mixed on the wheel and kept: everyday use, so no PIN.
+  if (m === "POST" && path === "/api/colors") {
+    const b = await body(req);
+    if (Number.isInteger(b.keep) && b.keep >= 0 && b.keep <= 0xffffff) { store.keepColor(b.keep); say("Kept a new colour for the lights"); }
+    if (Number.isInteger(b.drop)) store.dropColor(b.drop);
+    changed();
+    return json(res, 200, { ok: true });
+  }
   // Scenes are everyday use: anyone in the house runs, makes and changes them.
   if (m === "POST" && path === "/api/scenes/run") {
     const b = await body(req);
@@ -541,6 +577,20 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       changed();
     }
     return json(res, 200, { ok: true, joinPin: store.joinPin });
+  }
+  // This device's look becomes the home's: what every device that has not chosen its own will show.
+  if (path === "/api/look/home") {
+    const b = await body(req);
+    if (mine.theme) store.setTheme(mine.theme);
+    if (mine.style) store.setStyle(mine.style);
+    if (mine.custom) store.setCustom(mine.custom);
+    if (mine.character) store.setCharacter(mine.character);
+    if (mine.rotate) store.setRotate(mine.rotate);
+    for (const [who, v] of Object.entries(mine.voices ?? {})) store.setVoice(who, v);
+    store.setLook(key, null);
+    if (b.everyone === true) store.clearLooks();
+    say(b.everyone === true ? "Made this device's look the home's look, for every device" : "Made this device's look the home's look");
+    return done();
   }
   if (path === "/api/join-rules") {
     const asked = (await body(req)).deny;

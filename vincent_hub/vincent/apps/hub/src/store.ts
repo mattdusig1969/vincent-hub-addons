@@ -8,6 +8,9 @@ import { dirname, join } from "node:path";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { ControlRequest, ListStatus, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
 
+/** The parts of the look one phone or tablet may choose for itself. Anything left out follows the home. */
+export interface DeviceLook { theme?: string; style?: string; custom?: { font: string; shape: string; outfits?: Record<string, string> }; character?: string; rotate?: string; voices?: Record<string, { locale: string; voice: string }> }
+
 interface Saved {
   /** device id -> added | ignored. Absent = found. */
   devices: Record<string, "added" | "ignored">;
@@ -22,7 +25,7 @@ interface Saved {
   /** The hub's own Home Assistant login, so the household is never locked out of it. */
   ha?: { username: string; password: string };
   /** Phones and tablets allowed to talk to this home: sha-256 of each one's key -> its name. */
-  paired?: Record<string, { name: string; since: string; person?: string; /** What this device may not control (rule ids). */ deny?: string[] }>;
+  paired?: Record<string, { name: string; since: string; person?: string; /** What this device may not control (rule ids). */ deny?: string[]; /** Set on the device that set the home up: its look is the home's look. */ owner?: boolean; /** This device's own look, where it differs from the home's. */ look?: DeviceLook }>;
   /** The PIN that lets a new phone or tablet join. Not the admin PIN: it opens no settings. Kept readable so the owner can look it up. */
   joinPin?: string;
   /** The rules a device starts with when it joins with the join PIN. The owner can change any one device afterwards. */
@@ -115,9 +118,9 @@ export const store = {
     return timingSafeEqual(got, Buffer.from(saved.pin.hash, "hex"));
   },
   /** Lets a phone or tablet in, and returns the key it must show from now on. Only the key's hash is kept. */
-  pair(name: string, person = "", deny: string[] = []): string {
+  pair(name: string, person = "", deny: string[] = [], owner = false): string {
     const key = randomBytes(24).toString("base64url");
-    (saved.paired ??= {})[sha(key)] = { name, since: new Date().toISOString(), ...(person ? { person } : {}), ...(deny.length ? { deny: [...deny] } : {}) };
+    (saved.paired ??= {})[sha(key)] = { name, since: new Date().toISOString(), ...(person ? { person } : {}), ...(deny.length ? { deny: [...deny] } : {}), ...(owner ? { owner: true } : {}) };
     save();
     return key;
   },
@@ -145,6 +148,22 @@ export const store = {
     save();
     return saved.paired![h].name;
   },
+  /** Is this the device whose look is the home's look? The one that set the home up; in a home from before that was written down, the first to join. */
+  isOwner(key: string): boolean {
+    const all = Object.entries(saved.paired ?? {}), h = sha(key);
+    if (all.some(([, d]) => d.owner)) return !!saved.paired?.[h]?.owner;
+    return all.sort((a, b) => a[1].since.localeCompare(b[1].since))[0]?.[0] === h;
+  },
+  /** This device's own look: only what it chose differently from the home. */
+  lookOf(key: string): DeviceLook { return saved.paired?.[sha(key)]?.look ?? {}; },
+  setLook(key: string, look: DeviceLook | null): void {
+    const d = saved.paired?.[sha(key)];
+    if (!d) return;
+    if (look && Object.keys(look).length) d.look = look; else delete d.look;
+    save();
+  },
+  /** Every joined device goes back to following the home's look. */
+  clearLooks(): void { for (const d of Object.values(saved.paired ?? {})) delete d.look; save(); },
   get joinPin(): string { return saved.joinPin ?? ""; },
   get joinDeny(): string[] { return saved.joinDeny ?? []; },
   setJoinDeny(deny: string[]): void { if (deny.length) saved.joinDeny = deny; else delete saved.joinDeny; save(); },
