@@ -208,14 +208,20 @@ export class Talk {
     } catch (e) { if (e instanceof TalkRefusal) throw e; console.log(`[talk] no pass: ${(e as Error).message}`); throw new TalkRefusal("offline", "The hub could not reach the internet, so chat cannot work right now."); }
     const { text: now } = houseNow(await this.deps.house());
     const said = earlier.slice(-12).map((t) => `${t.role === "you" ? "They" : "You"}: ${String(t.text).slice(0, 400)}`).join("\n");
-    const system = this.system(character, asker, now, true) + (said ? `\n\nEARLIER IN THIS CONVERSATION (typed)\n${said}` : "");
+    const ending = `\n\nWHEN TO STOP LISTENING (this is a spoken conversation; the microphone hears the whole room)
+- If the person says they are done (stop, stop listening, hang up, that's all, goodbye, never mind, or your name and "stop"), say goodbye in three words or fewer and call end_conversation.
+- If what you hear is clearly not meant for you (people talking to each other, someone on the phone, a television, a question with someone else's name in it), do not answer it and do not comment on it: call not_for_me and say nothing. When in real doubt whether they mean you, answer briefly.
+- Never keep a conversation going for its own sake. When a request is done and nothing more is asked, a short acknowledgement is enough.`;
+    const system = this.system(character, asker, now, true) + ending + (said ? `\n\nEARLIER IN THIS CONVERSATION (typed)\n${said}` : "");
     return {
       url: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(pass)}`,
       setup: {
         model: `models/${LIVE_MODEL}`,
         generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice.voice } }, languageCode: voice.locale } },
         systemInstruction: { parts: [{ text: system }] },
-        tools: [{ functionDeclarations: [...TOOLS[0].functionDeclarations, { name: "look_at_house", description: "The state of the whole house this minute: every device, what is playing, the weather. Call before answering about the house." }] }],
+        tools: [{ functionDeclarations: [...TOOLS[0].functionDeclarations, { name: "look_at_house", description: "The state of the whole house this minute: every device, what is playing, the weather. Call before answering about the house." },
+          { name: "end_conversation", description: "End this spoken conversation and stop listening. Call it after your short goodbye when the person says they are done." },
+          { name: "not_for_me", description: "What was just heard was not addressed to you. Call this instead of answering, and say nothing." }] }],
         // The written words are told which language to expect: left to guess, the service now and then writes a word in another one.
         inputAudioTranscription: { languageCodes: [voice.locale] }, outputAudioTranscription: { languageCodes: [voice.locale] },
       },
