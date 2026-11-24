@@ -363,7 +363,7 @@ const SCHOLARS = [
 export const CHARACTERS = [
   { id: "vincent", name: "Vincent", note: "The butler. Dry, courteous, unflappable.", locale: "en-GB", voice: "Enceladus", voices: VOICES },
   { id: "roxy", name: "Roxy", note: "The house manager. Warm, polished, quick.", locale: "en-US", voice: "Leda", voices: LADIES },
-  { id: "otto", name: "Otto", note: "The all-seeing machine. Knows everything, and will remind you.", locale: "en-US", voice: "Charon", voices: VOICES },
+  { id: "otto", name: "Otto", note: "The all-seeing machine. Knows everything, and will remind you.", locale: "en-GB", voice: "Charon", voices: VOICES },
   { id: "ernest", name: "Ernest", note: "The nervous one in the box. Scared of his own shadow, bless him.", locale: "en-US", voice: "Fenrir", voices: VOICES },
   { id: "julian", name: "Julian", note: "The well-read one. Witty, friendly, and has read the manual. All of them.", locale: "en-US", voice: "Sadachbia", voices: GENTS },
   { id: "sora", name: "Sora", note: "The mathematician in the library. Brilliant, cheerful, always has the answer.", locale: "en-US", voice: "Achernar", voices: SCHOLARS },
