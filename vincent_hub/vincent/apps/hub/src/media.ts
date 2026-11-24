@@ -106,6 +106,23 @@ export async function radio(q: string, tag: string): Promise<MediaItem[]> {
 
 // ───────────────────────── a player's sources, and playing one ─────────────────────────
 
+/** Home Assistant's name for the Echo driver. An Echo is asked for music by name: play_media(<service>, "<what>"). */
+const ECHO = "alexa_media";
+/** A start for an Echo's Amazon Music tab: names Amazon Music answers to. Anything else can be typed. */
+const AMAZON_PICKS: { label: string; picks: string[] }[] = [
+  { label: "Today", picks: ["Today's hits", "Pop hits", "Country hits", "Hip-hop hits", "Rock hits", "Latin hits"] },
+  { label: "Decades", picks: ["60s hits", "70s hits", "80s hits", "90s hits", "2000s hits", "Classic rock"] },
+  { label: "Moods", picks: ["Dinner party music", "Relaxing music", "Jazz for a quiet evening", "Classical for focus", "Feel-good music", "Workout music"] },
+  { label: "For the house", picks: ["Music for cooking", "Sunday morning music", "Kids' music", "Acoustic favourites", "Soul classics", "Yacht rock"] },
+];
+/** What to ask an Echo's Spotify for, from something chosen in the Spotify catalogue. */
+function spotifyAsk(id: string, title: string, subtitle = ""): string {
+  const first = subtitle.split(" · ")[0]?.trim() ?? "";
+  const by = first && !/^\d+ /.test(first) && first !== "Artist" ? ` by ${first}` : "";
+  const kind = id.split(":")[1];
+  return kind === "album" ? `the album ${title}${by}` : kind === "playlist" ? `the playlist ${title}` : `${title}${by}`;
+}
+
 export class Media {
   private ha: HA;
   private devices: Devices;
@@ -139,6 +156,12 @@ export class Media {
       // The whole SiriusXM guide plays through a saved station's link, so one saved live station is what makes it possible.
       out.siriusxm = favs.some((f) => new RegExp(`[?&]sid=${SIRIUSXM}&`).test(f.uri ?? "") && /channel-linear/.test(f.uri ?? ""));
       out.spotify = true;
+    } else if (p.integration === ECHO) {
+      // An Echo has no catalogue to read, but it plays whatever it is asked for by name, on the service named.
+      out.siriusxm = true;
+      out.radio = true;
+      out.spotify = !!(await this.devices.anyHost("sonos").catch(() => undefined)); // the Spotify catalogue is read through a Sonos
+      out.amazon = AMAZON_PICKS.map((g) => ({ label: g.label, items: g.picks.map((name): MediaItem => ({ kind: "amazon", id: name, title: name, subtitle: "Amazon Music" })) }));
     } else {
       out.inputs = list.map((x) => ({ kind: "input", id: x, title: x }));
     }
@@ -237,6 +260,11 @@ export class Media {
     const best = <T extends MediaItem>(items: T[]) => items.map((it) => ({ it, s: score(it.title, it.subtitle) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s)[0];
     const start = async (it: MediaItem, from: string) => { await this.play(controlId, it); return { title: it.title, from }; };
 
+    // An Echo is simply asked: Alexa finds it on the household's own music service.
+    if ((await this.devices.player(controlId)).integration === ECHO) {
+      await this.play(controlId, { kind: "amazon", id: query, title: query, service: "DEFAULT" });
+      return { title: query, from: "Alexa" };
+    }
     const src = await this.sources(controlId).catch(() => null);
     if (src) {
       const saved = best([...src.favourites.flatMap((g) => g.items), ...src.playlists]);
@@ -268,12 +296,23 @@ export class Media {
   private lastArt = new Map<string, string>();
   artFor(controlId: string): string | undefined { return this.lastArt.get(controlId); }
 
-  async play(controlId: string, item: { kind?: string; id?: string; title?: string; art?: string }): Promise<void> {
+  async play(controlId: string, item: { kind?: string; id?: string; title?: string; subtitle?: string; art?: string; service?: string }): Promise<void> {
     const p = await this.devices.player(controlId);
     if (item.art && /^\/api\//.test(item.art)) this.lastArt.set(controlId, item.art); else this.lastArt.delete(controlId);
     const id = String(item.id ?? "");
     if (!id) throw new Error("Nothing was chosen to play.");
     const play = (type: string, content: string) => this.ha.service("media_player", "play_media", p.entityId, { media_content_type: type, media_content_id: content });
+    if (p.integration === ECHO) {
+      const title = String(item.title ?? id).slice(0, 120);
+      switch (item.kind) {
+        case "sxm": await play("SIRIUSXM", this.lineup.has(id)?.name ?? title); break;
+        case "spotify": await play("SPOTIFY", spotifyAsk(id, title, item.subtitle)); break;
+        case "radio": await play("TUNEIN", title); break;
+        case "amazon": await play(item.service === "DEFAULT" ? "DEFAULT" : "AMAZON_MUSIC", id.slice(0, 120)); break;
+        default: throw new Error("An Echo cannot play that. Choose something from SiriusXM, Spotify, Amazon Music or Radio.");
+      }
+      return;
+    }
     switch (item.kind) {
       case "favourite": await play("favorite_item_id", id); break;
       case "playlist": await play("playlist", id); break;

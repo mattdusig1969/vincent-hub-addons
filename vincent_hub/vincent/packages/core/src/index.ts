@@ -131,7 +131,8 @@ export interface ControlRequest {
 
 /** Something a speaker can be asked to play. */
 export interface MediaItem {
-  kind: "favourite" | "playlist" | "radio" | "input" | "sxm" | "spotify";
+  /** amazon = something Amazon Music is asked for by name (an Echo plays what it is told, it has no catalogue to browse). */
+  kind: "favourite" | "playlist" | "radio" | "input" | "sxm" | "spotify" | "amazon";
   id: string;
   title: string;
   subtitle?: string;
@@ -164,6 +165,8 @@ export interface MediaSources {
   siriusxm: boolean;
   /** True when this player can play Spotify through the household's Sonos. */
   spotify: boolean;
+  /** For an Echo: things to ask Amazon Music for, by name. Anything else can be typed. */
+  amazon?: MediaGroup[];
 }
 
 /** The weather at the home. `condition` is a plain word: sunny, cloudy, partlycloudy, rainy, snowy, fog, clear-night… */
