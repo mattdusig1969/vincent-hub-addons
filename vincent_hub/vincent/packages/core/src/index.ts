@@ -247,6 +247,12 @@ export interface Brand {
   category: Category;
   /** search = the hub goes looking · steps = the maker asks for something · matter = added by Matter code · link = needs the maker's website (not yet) · none = the maker gives no way in */
   how: "search" | "steps" | "matter" | "link" | "none";
+  /** Can it be added? yes = the maker's devices work · some = only certain models · no = not compatible yet. */
+  fit: "yes" | "some" | "no";
+  /** What adding it takes, in a few words: "Requires your Ring username and password". */
+  needs: string;
+  /** For "some" and "no": which models do work, or what would. */
+  models?: string;
   /** What to check first. Shown before starting, and again if nothing is found. */
   tips: string;
   /** "matter" when a Matter code is another way to add this brand. */

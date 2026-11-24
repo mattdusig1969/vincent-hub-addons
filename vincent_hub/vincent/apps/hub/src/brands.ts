@@ -13,9 +13,10 @@
  */
 import type { Brand } from "../../../packages/core/src/index.ts";
 
-interface Entry extends Brand { driver?: string }
+type Told = Omit<Brand, "fit" | "needs" | "models">;
+interface Entry extends Told { driver?: string }
 
-const B = (id: string, name: string, category: Brand["category"], how: Brand["how"], driver: string | undefined, tips: string, also?: string): Entry => ({ id, name, category, how, driver, tips, also });
+const B = (id: string, name: string, category: Told["category"], how: Told["how"], driver: string | undefined, tips: string, also?: string): Entry => ({ id, name, category, how, driver, tips, also });
 /** A brand added with a Matter code: which of its devices that works for, and where the maker keeps the code. */
 const M = (b: Entry, works: string, guide: string[]): Entry => ({ ...b, works, guide });
 
@@ -110,5 +111,74 @@ export const BRANDS: Entry[] = [
   B("homekit", "Anything with a HomeKit code", "other", "steps", "homekit_controller", "The device must not be in Apple Home at the same time: remove it there first. Then it appears here to be paired with the eight-digit code on its label."),
 ];
 
-export const brandList = (): Brand[] => BRANDS.map(({ driver: _driver, ...b }) => b);
+/**
+ * What the household should expect before they start: what adding takes, and whether their model can be added at all.
+ * [needs] or [needs, fit, models]. A brand not listed here is described from how it is added.
+ */
+const EXPECT: Record<string, [string, Brand["fit"]?, string?]> = {
+  hue: ["Requires pressing the button on the Hue Bridge"],
+  govee: ["Requires LAN Control switched on in the Govee app", "some", "Most Govee Wi-Fi lights work. Bluetooth-only lights do not."],
+  lifx: ["Nothing to type: the hub searches"],
+  kasa: ["May require your TP-Link username and password"],
+  wled: ["Requires the strip's address from the WLED app"],
+  nanoleaf: ["Requires holding the power button on the panels"],
+  yeelight: ["Requires LAN Control switched on in the Yeelight app"],
+  lutron: ["Requires pressing the button on the Smart Hub"],
+  shelly: ["Requires the device's address from the Shelly app"],
+  wiz: ["Requires Allow Local Communication switched on in the WiZ app"],
+  elgato: ["Requires the light's address"],
+  wemo: ["Nothing to type: the hub searches"],
+  meross: ["Requires a Matter code from Apple Home or Google Home", "some", "Only Meross models with the Matter badge. Older Meross devices are not compatible; the current Matter versions of the same plugs and switches are."],
+  aqara: ["Requires an Aqara hub and a code from the Aqara app", "some", "Works through an Aqara hub (M2, M3, M1S, E1 or G3). Sensors and switches on their own are not compatible."],
+  switchbot: ["Requires a SwitchBot hub and a code from the SwitchBot app", "some", "Works through a SwitchBot Hub 2, Hub 3 or a Hub Mini marked Matter Enabled."],
+  leviton: ["Requires a code from the My Leviton app", "some", "Only Decora Smart Wi-Fi 2nd generation (models starting D2). First-generation models are not compatible."],
+  amazon_echo: ["Requires your Amazon username and password"],
+  amazon_plug: ["Works only through Alexa", "no", "Amazon gives no way in. Plugs with the Matter badge from other makers can be added."],
+  wyze: ["Works only in the Wyze app", "no", "Wyze gives no way in for other apps."],
+  smartthings: ["Needs an account link on Samsung's website", "no", "Devices in SmartThings that speak Matter can be added: choose Already in SmartThings."],
+  sonos: ["Nothing to type: the hub searches"],
+  apple_tv: ["Requires a code shown on the TV"],
+  roku: ["Requires the Roku's address from its Settings"],
+  samsung_tv: ["Requires the TV's address, and a yes on the TV"],
+  lg_tv: ["Requires the TV's address, and a yes on the TV"],
+  cast: ["Nothing to type: the hub searches"],
+  android_tv: ["Requires a code shown on the TV"],
+  denon: ["Nothing to type, or the receiver's address"],
+  yamaha: ["Requires the receiver's address"],
+  heos: ["Requires one speaker's address"],
+  bluesound: ["Requires the player's address"],
+  nest_thermostat: ["Requires a code from the Google Home app", "some", "Only the Nest Thermostat (2020) and the Nest Learning Thermostat 4th generation. The 3rd generation and earlier, and the Thermostat E, are not compatible yet."],
+  nest: ["Needs an account link on Google's website", "no", "Nest thermostats can be added: the Nest Thermostat (2020) and the Learning Thermostat 4th generation."],
+  ecobee: ["Requires the HomeKit code from the thermostat's own menu"],
+  honeywell: ["Requires your Total Connect Comfort username and password"],
+  sensibo: ["Requires an API key from Sensibo's website"],
+  tado: ["Needs an account link on tado's website", "no"],
+  ring: ["Requires your Ring username and password, and a code Ring texts you"],
+  reolink: ["Requires the camera's address, username and password"],
+  unifi: ["Requires the console's address and a local user"],
+  onvif: ["Requires the camera's address, username and password"],
+  eufy_camera: ["Requires RTSP switched on in the eufy app", "some", "Only plug-in cameras (Indoor Cam, Wired Cam C31 and similar). Battery cameras and doorbells are not compatible."],
+  camera_stream: ["Requires the camera's stream address"],
+  eufy: ["Requires a Matter code from the eufy app", "some", "Only the FamiLock S3 and S3 Max. Other eufy locks are not compatible yet."],
+  blink: ["Requires your Blink username and password, and a code Blink sends you"],
+  schlage: ["Requires your Schlage Home username and password", "some", "Schlage Encode Wi-Fi locks. Schlage Connect and Sense locks are not compatible."],
+  yale: ["Needs an account link on Yale's website", "no", "Yale locks with the Matter badge can be added with their code."],
+  arlo: ["Works only in the Arlo app", "no", "Arlo gives no way in for other apps."],
+  simplisafe: ["Needs an account link on SimpliSafe's website", "no"],
+  from_apple: ["Requires a code from the Apple Home app"],
+  from_google: ["Requires a code from the Google Home app"],
+  from_alexa: ["Requires a code from the Alexa app"],
+  from_smartthings: ["Requires a code from the SmartThings app"],
+  matter: ["Requires the device's Matter code"],
+  homekit: ["Requires the eight-digit HomeKit code on the device"],
+};
+const BY_HOW: Record<Brand["how"], [string, Brand["fit"]]> = {
+  search: ["Nothing to type: the hub searches", "yes"], steps: ["Requires a few details from the maker's app", "yes"], matter: ["Requires a Matter code", "yes"],
+  link: ["Needs an account link on the maker's website", "no"], none: ["Works only in the maker's own app", "no"],
+};
+
+export const brandList = (): Brand[] => BRANDS.map(({ driver: _driver, ...b }) => {
+  const [needs, fit, models] = EXPECT[b.id] ?? [];
+  return { ...b, needs: needs ?? BY_HOW[b.how][0], fit: fit ?? BY_HOW[b.how][1], ...(models ? { models } : {}) };
+});
 export const brand = (id: string): Entry | undefined => BRANDS.find((b) => b.id === id);
