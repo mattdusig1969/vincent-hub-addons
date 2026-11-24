@@ -262,7 +262,10 @@ export interface StepField {
  *  stopped — not added; `text` says why
  */
 export interface Step {
-  kind: "form" | "wait" | "done" | "stopped";
+  /** link = the maker's own website has to be visited (`url`); the hub notices when that is finished. */
+  kind: "form" | "wait" | "done" | "stopped" | "link";
+  /** With `link`: the page to open. */
+  url?: string;
   /** Names the setup under way, for the next answer. Absent once it has ended. */
   flow?: string;
   title: string;

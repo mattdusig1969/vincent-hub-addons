@@ -62,6 +62,7 @@ import { Lists } from "./lists.ts";
 import { Portraits, pictureType } from "./portraits.ts";
 import { dir as dataDir } from "./store.ts";
 import { Flows } from "./flows.ts";
+import { Echo, ECHO_DRIVER } from "./echo.ts";
 import { brandList } from "./brands.ts";
 import { erase, erasePreview, report } from "./upkeep.ts";
 import { MatterKeeper } from "./matter.ts";
@@ -86,6 +87,13 @@ const lists = new Lists(ha);
 const repeatOf = (v: unknown): Repeat => (["day", "weekdays", "week", "month", "year"].includes(String(v)) ? (String(v) as Repeat) : "");
 const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
 const flows = new Flows(ha, devices);
+// Echo speakers need a part the hub fetches once; and Amazon's sign-in page is shown from Home Assistant's own address.
+const echo = new Echo(ha, (method, path, data, timeout) => supervisor(method, path, timeout ?? 60_000, data));
+flows.preparers[ECHO_DRIVER] = echo;
+flows.haUrl = async (host) => {
+  const info = await supervisor("GET", "/core/info").catch(() => ({} as any));
+  return `${info.ssl ? "https" : "http"}://${host.replace(/:\d+$/, "")}:${info.port ?? 8123}`;
+};
 // A found device with nothing to ask is answered with a plain yes; anything more goes to the app as a question.
 devices.steps = async (flowId, handler, rooms) => {
   const first = await flows.startFound(flowId, handler, rooms);
@@ -688,7 +696,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   }
   if (path === "/api/adding") {
     const b = await body(req);
-    const step = await flows.startBrand(String(b.brand ?? ""), roomIds(b));
+    const step = await flows.startBrand(String(b.brand ?? ""), roomIds(b), String(req.headers.host ?? ""));
     const brand = brandList().find((x) => x.id === b.brand)?.name ?? "a maker";
     if (step.kind === "done") say(`Connected ${brand}`); else if (step.flow) addingWhat.set(step.flow, brand);
     changed();

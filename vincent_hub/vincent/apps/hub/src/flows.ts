@@ -47,7 +47,12 @@ const plain = (s: string, vars: Record<string, unknown> = {}) =>
     .replace(/Home Assistant/g, "Vincent").replace(/\bSubmit\b/g, "Continue").replace(/\b[Tt]he host\b/g, "the address").replace(/\bIP address\b/g, "address").replace(/\n{2,}/g, "\n").trim();
 const titled = (s: string) => s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 
-interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string }
+interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string; step?: string; link?: boolean; hassUrl?: string; prepare?: boolean }
+
+/** Something a brand needs on the hub before its sign-in can start (Echo: a part fetched once). */
+export interface Preparer { has(): Promise<boolean>; prepare(): void; state: string; message: string }
+const AMAZONS = [["amazon.com", "United States"], ["amazon.ca", "Canada"], ["amazon.co.uk", "United Kingdom"], ["amazon.de", "Germany"], ["amazon.fr", "France"], ["amazon.it", "Italy"], ["amazon.es", "Spain"], ["amazon.com.au", "Australia"], ["amazon.co.jp", "Japan"], ["amazon.in", "India"], ["amazon.com.mx", "Mexico"], ["amazon.com.br", "Brazil"], ["amazon.nl", "Netherlands"]];
+const GETTING_READY = "Getting your hub ready for Echo speakers. This happens once and takes about two minutes. Keep this open.";
 
 export class Flows {
   private ha: HA;
@@ -56,6 +61,19 @@ export class Flows {
   private words = new Map<string, Record<string, string>>();
 
   constructor(ha: HA, devices: Devices) { this.ha = ha; this.devices = devices; }
+
+  /** By driver: what must be on the hub first. */
+  preparers: Record<string, Preparer> = {};
+  /** The address a phone on the home Wi-Fi can open Home Assistant's own pages at, given the address it reaches this hub by. */
+  haUrl?: (host: string) => Promise<string>;
+  /** Sign-ins whose website visit has finished (Home Assistant says so; asking it before then would end the visit early). */
+  private finished = new Set<string>();
+  private unlisten?: () => void;
+  /** Subscribed afresh for each visit: a subscription does not survive Home Assistant restarting. */
+  private async listen(): Promise<void> {
+    try { this.unlisten?.(); } catch { /* the old line had already gone */ }
+    this.unlisten = await this.ha.open({ type: "subscribe_events", event_type: "data_entry_flow_progressed" }, (e) => { const id = e?.data?.flow_id; if (id) this.finished.add(String(id)); }).catch(() => undefined);
+  }
 
   /** The maker's own wording for its questions, in English. */
   private async wording(domain: string): Promise<Record<string, string>> {
@@ -68,13 +86,28 @@ export class Flows {
   }
 
   /** Starts adding a brand. `rooms` are where what it brings should go. */
-  async startBrand(brandId: string, rooms: string[] = []): Promise<Step> {
+  async startBrand(brandId: string, rooms: string[] = [], host = ""): Promise<Step> {
     const b = brand(brandId);
     if (!b) return stopped("Vincent does not know that brand.");
     if (b.how === "none" || !b.driver) return stopped(b.tips);
     if (b.how === "link") return stopped(`${b.tips} Vincent cannot open that link for you yet.`);
-    const r = await this.ha.restRaw("POST", "/config/config_entries/flow", { handler: b.driver, show_advanced_options: false });
-    return this.read(r.body, b.driver, rooms, undefined, b.tips, b.name);
+    const hassUrl = this.haUrl && host ? await this.haUrl(host).catch(() => undefined) : undefined;
+    const prep = this.preparers[b.driver];
+    if (prep && !(await prep.has())) {
+      prep.prepare();
+      const id = `prepare${Math.random().toString(36).slice(2, 12)}`;
+      this.open.set(id, { domain: b.driver, rooms, fields: [], menu: false, tips: b.tips, name: b.name, prepare: true, hassUrl });
+      const step: Step = { kind: "wait", flow: id, title: b.name, text: GETTING_READY, fields: [] };
+      this.last.set(id, step);
+      return step;
+    }
+    return this.begin(b.driver, rooms, b.tips, b.name, hassUrl);
+  }
+  private async begin(driver: string, rooms: string[], tips?: string, name?: string, hassUrl?: string): Promise<Step> {
+    const r = await this.ha.restRaw("POST", "/config/config_entries/flow", { handler: driver, show_advanced_options: false });
+    const step = await this.read(r.body, driver, rooms, undefined, tips, name);
+    if (step.flow && hassUrl) { const o = this.open.get(step.flow); if (o) o.hassUrl = hassUrl; }
+    return step;
   }
 
   /** Carries on with something the hub found that is waiting for an answer. */
@@ -88,6 +121,8 @@ export class Flows {
     const o = this.open.get(flowId);
     if (!o) return stopped("That setup has ended. Start it again.");
     const data: Record<string, unknown> = {};
+    // Echo: the household is asked three things; the hub fills in where Amazon's page is to be shown from.
+    if (o.domain === "alexa_media" && o.step === "user" && o.hassUrl) data.hass_url = o.hassUrl;
     if (o.menu) data.next_step_id = String(values.choice ?? "");
     else for (const f of o.fields) {
       const v = values[f.name];
@@ -108,14 +143,26 @@ export class Flows {
   async poll(flowId: string): Promise<Step> {
     const o = this.open.get(flowId);
     if (!o) return stopped("That setup has ended. Start it again.");
+    if (o.prepare) {
+      const prep = this.preparers[o.domain];
+      if (prep?.state === "failed") { this.open.delete(flowId); this.last.delete(flowId); return stopped(prep.message || "The hub could not get ready. Try again in a few minutes."); }
+      if (!prep || prep.state === "working" || !(await prep.has())) return this.last.get(flowId)!;
+      this.open.delete(flowId); this.last.delete(flowId);
+      return this.begin(o.domain, o.rooms, o.tips, o.name, o.hassUrl);
+    }
+    // A website visit under way: Home Assistant must not be asked until it says the visit is over.
+    if (o.link && !this.finished.has(flowId)) return this.last.get(flowId)!;
+    this.finished.delete(flowId);
     const r = await this.ha.restRaw("GET", `/config/config_entries/flow/${flowId}`);
     if (r.status === 404) return stopped("That setup has ended. Start it again.");
     return this.read(r.body, o.domain, o.rooms, flowId, o.tips);
   }
 
   async cancel(flowId: string): Promise<void> {
+    const was = this.open.get(flowId);
     if (!this.open.delete(flowId)) return;
     this.last.delete(flowId);
+    if (was?.prepare) return;
     await this.ha.restRaw("DELETE", `/config/config_entries/flow/${flowId}`).catch(() => {});
   }
 
@@ -151,6 +198,15 @@ export class Flows {
         return end(stopped(tips && /no_dev|cannot_connect|timeout/.test(reason) ? `${why} ${tips}` : why));
       }
       case "external": case "external_done":
+        if (r.type === "external" && r.url && domain === "alexa_media" && id) {
+          await this.listen();
+          this.finished.delete(id);
+          const before = this.open.get(id);
+          this.open.set(id, { domain, rooms, fields: [], menu: false, tips, name, link: true, hassUrl: before?.hassUrl });
+          const step: Step = { kind: "link", flow: id, url: String(r.url), title: name ?? "Amazon", text: "Amazon's own sign-in page opens next. Sign in there the way you always do. If Amazon texts you a code, type it on that page. When it says you are done, come back here.", fields: [] };
+          this.last.set(id, step);
+          return step;
+        }
         if (id) await this.ha.restRaw("DELETE", `/config/config_entries/flow/${id}`).catch(() => {});
         return end(stopped("This maker needs an account link on its own website. Vincent cannot open that for you yet."));
       case "progress": case "show_progress": {
@@ -169,12 +225,22 @@ export class Flows {
       }
       case "form": {
         // Optional questions the app has no way to draw (lists of several answers) are left out; the maker's default stands.
-        const fields = ((r.data_schema ?? []) as any[]).filter((e) => e.required || !(e.type === "multi_select" || e.selector?.select?.multiple || e.selector?.select?.custom_value))
+        let fields = ((r.data_schema ?? []) as any[]).filter((e) => e.required || !(e.type === "multi_select" || e.selector?.select?.multiple || e.selector?.select?.custom_value))
           .map((e): StepField => field(e, say(`step.${r.step_id}.data.${e.name}`), say(`step.${r.step_id}.data_description.${e.name}`)))
           .map((f): StepField => ({ ...f, ...(PLAINER[String(r.handler)]?.[f.name] ?? {}) }));
         const errors = Object.fromEntries(Object.entries((r.errors ?? {}) as Record<string, string>).map(([k, v]) => [k, plain(WHY[v] ?? say(`error.${v}`) ?? titled(String(v)))]));
-        this.open.set(id!, { domain, rooms, fields, menu: false, tips, name });
-        const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
+        // Echo's first form has a dozen technical settings; a household is asked for three things and the rest keep their defaults.
+        const echoFirst = domain === "alexa_media" && r.step_id === "user";
+        if (echoFirst) {
+          const was = (n: string) => fields.find((f) => f.name === n)?.value;
+          fields = [
+            { name: "email", label: "Amazon email", help: "The email you sign in to Amazon with.", type: "text", required: true, value: was("email") || undefined },
+            { name: "password", label: "Amazon password", help: "Your encrypted password is sent securely to Amazon.", type: "password", required: true },
+            { name: "url", label: "Your Amazon site", help: "The Amazon you shop at. It decides which Alexa your speakers belong to.", type: "choice", required: true, value: String(was("url") || "amazon.com"), options: AMAZONS.map(([value, label]) => ({ value, label: `${label} (${value})` })) },
+          ];
+        }
+        this.open.set(id!, { domain, rooms, fields, menu: false, tips, name, step: String(r.step_id ?? ""), hassUrl: this.open.get(id!)?.hassUrl });
+        const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's own sign-in page comes next, so a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
         this.last.set(id!, step);
         return step;
       }
