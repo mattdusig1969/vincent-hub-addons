@@ -87,7 +87,7 @@ export class Place {
         this.days = { at: Date.now(), entity, list: list.slice(0, 6).map((d, i) => {
           const mine = hours.filter((h) => dayOf(h.datetime) === dayOf(d.datetime)).map((h) => ({ at: h.datetime, condition: h.condition, temperature: Math.round(h.temperature), rain: num(h.precipitation_probability) }));
           return { date: d.datetime, condition: d.condition, high: Math.round(d.temperature), low: typeof d.templow === "number" ? Math.round(d.templow) : undefined,
-            rain: num(d.precipitation_probability), wet: num(d.precipitation, 2), wind: num(d.wind_speed), humidity: num(d.humidity), uv: i > 0 && !d.uv_index ? undefined : num(d.uv_index), // the source gives no sun strength for later days, and says 0 ...(mine.length ? { hours: mine } : {}) };
+            rain: num(d.precipitation_probability), wet: num(d.precipitation, 2), wind: num(d.wind_speed), humidity: num(d.humidity), uv: i > 0 && !d.uv_index ? undefined : num(d.uv_index), ...(mine.length ? { hours: mine } : {}) };
         }) };
         this.onDays();
       })
