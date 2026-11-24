@@ -146,6 +146,15 @@ const changed = () => {
   if (pending) return;
   pending = setTimeout(() => { pending = undefined; for (const s of streams) s.write("event: changed\ndata: 1\n\n"); }, 150);
 };
+// An Echo tells Home Assistant about a new song only now and then (a radio station's next song can go unreported for minutes).
+// While somebody has the app open and an Echo is playing, it is asked every 20 seconds, so the song shown is the song heard.
+setInterval(async () => {
+  if (!streams.size || !ha.connected) return;
+  try {
+    const playing = (await devices.playersOf("alexa_media")).filter((e) => ha.states.get(e)?.state === "playing");
+    if (playing.length) await ha.call({ type: "call_service", domain: "homeassistant", service: "update_entity", service_data: { entity_id: playing } });
+  } catch { /* next time */ }
+}, 20_000);
 /** Somebody's starred music changed (or whose device it is): every open app checks its own list at once. */
 const starsChanged = () => { for (const s of streams) s.write("event: stars\ndata: 1\n\n"); };
 // Every home starts with three lists. Made once, after setup, when the hub is reachable.

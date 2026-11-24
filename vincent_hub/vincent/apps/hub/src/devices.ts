@@ -354,6 +354,12 @@ export class Devices {
     for (const ref of (await this.snapshot()).controls.values()) if (ref.entityId === entityId) return ref.host;
     return undefined;
   }
+  /** The entities of every added player that one maker's driver brought. */
+  async playersOf(integration: string): Promise<string[]> {
+    const snap = await this.snapshot();
+    return [...snap.controls.values()].filter((r) => r.integration === integration && r.domain === "media_player" && snap.devices.find((d) => d.id === r.deviceId)?.status === "added").map((r) => r.entityId);
+  }
+
   async anyHost(integration: string): Promise<string | undefined> {
     for (const ref of (await this.snapshot()).controls.values()) if (ref.integration === integration && ref.host) return ref.host;
     return undefined;
