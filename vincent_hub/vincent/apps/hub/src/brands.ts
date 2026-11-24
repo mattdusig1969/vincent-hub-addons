@@ -57,7 +57,7 @@ export const BRANDS: Entry[] = [
   M(B("leviton", "Leviton Decora Smart", "lights", "matter", undefined, "Leviton's second-generation Decora Smart Wi-Fi switches, dimmers and plugs can be added with a code.", "matter"),
     "For Decora Smart Wi-Fi 2nd Gen (models starting D2). First-generation models cannot be added.",
     ["In the My Leviton app, join the Matter Early Access Program and run System Updates (once).", "Tap the switch or dimmer, then Device Settings.", "Tap Matter Pairing Code and enter the number under the square code here."]),
-  B("amazon_echo", "Amazon Echo (Alexa)", "media", "steps", "alexa_media", "Sign in with the Amazon account your Echo speakers are on. You type your email and password here, then Amazon's own sign-in page opens to finish, so a code texted to your phone works. Your encrypted password is sent securely to Amazon. The first time, the hub takes about two minutes to get ready."),
+  B("amazon_echo", "Amazon Echo (Alexa)", "media", "steps", "alexa_media", "Sign in with the Amazon account your Echo speakers are on. Amazon's own sign-in page opens for it: you type your email and password there, and a code texted to your phone works. The first time, the hub takes about two minutes to get ready."),
   B("amazon_plug", "Amazon Smart Plug", "other", "none", undefined, "Amazon's own plugs can only be controlled through Alexa. Limited by manufacturer."),
   B("wyze", "Wyze", "other", "none", undefined, "Wyze devices work only through the Wyze app and account. Limited by manufacturer."),
   B("smartthings", "SmartThings", "other", "link", "smartthings", "SmartThings needs an account link on Samsung's website."),

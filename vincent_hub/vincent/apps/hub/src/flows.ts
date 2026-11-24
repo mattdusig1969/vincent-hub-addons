@@ -97,7 +97,7 @@ export class Flows {
       prep.prepare();
       const id = `prepare${Math.random().toString(36).slice(2, 12)}`;
       this.open.set(id, { domain: b.driver, rooms, fields: [], menu: false, tips: b.tips, name: b.name, prepare: true, hassUrl });
-      const step: Step = { kind: "wait", flow: id, title: b.name, text: GETTING_READY, fields: [] };
+      const step: Step = { kind: "wait", flow: id, title: b.name, text: GETTING_READY, doing: "Installing…", fields: [] };
       this.last.set(id, step);
       return step;
     }
@@ -122,7 +122,7 @@ export class Flows {
     if (!o) return stopped("That setup has ended. Start it again.");
     const data: Record<string, unknown> = {};
     // Echo: the household is asked three things; the hub fills in where Amazon's page is to be shown from.
-    if (o.domain === "alexa_media" && o.step === "user" && o.hassUrl) data.hass_url = o.hassUrl;
+    if (o.domain === "alexa_media" && o.step === "user") { data.email = ""; data.password = ""; if (o.hassUrl) data.hass_url = o.hassUrl; }
     if (o.menu) data.next_step_id = String(values.choice ?? "");
     else for (const f of o.fields) {
       const v = values[f.name];
@@ -234,13 +234,11 @@ export class Flows {
         if (echoFirst) {
           const was = (n: string) => fields.find((f) => f.name === n)?.value;
           fields = [
-            { name: "email", label: "Amazon email", help: "The email you sign in to Amazon with.", type: "text", required: true, value: was("email") || undefined },
-            { name: "password", label: "Amazon password", help: "Your encrypted password is sent securely to Amazon.", type: "password", required: true },
             { name: "url", label: "Your Amazon site", help: "The Amazon you shop at. It decides which Alexa your speakers belong to.", type: "choice", required: true, value: String(was("url") || "amazon.com"), options: AMAZONS.map(([value, label]) => ({ value, label: `${label} (${value})` })) },
           ];
         }
         this.open.set(id!, { domain, rooms, fields, menu: false, tips, name, step: String(r.step_id ?? ""), hassUrl: this.open.get(id!)?.hassUrl });
-        const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's own sign-in page comes next, so a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
+        const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's own sign-in page opens next. You type your email and password there, on Amazon's page, and a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
         this.last.set(id!, step);
         return step;
       }

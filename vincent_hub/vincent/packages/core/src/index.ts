@@ -264,6 +264,8 @@ export interface StepField {
 export interface Step {
   /** link = the maker's own website has to be visited (`url`); the hub notices when that is finished. */
   kind: "form" | "wait" | "done" | "stopped" | "link";
+  /** With `wait`: what is going on, in a word ("Installing…"). */
+  doing?: string;
   /** With `link`: the page to open. */
   url?: string;
   /** Names the setup under way, for the next answer. Absent once it has ended. */
