@@ -376,7 +376,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
 
   // Everyday use: no PIN.
   // The look this device shows: the home's, with whatever this device chose for itself laid over it.
-  const mine = store.lookOf(key);
+  // The owner's device has no look of its own: the home's look IS its look. One left over from earlier would hide every change it makes.
+  const mine = store.isOwner(key) ? {} : store.lookOf(key);
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
       // A player showing no picture of its own (a radio station) wears the picture of what was started on it.
