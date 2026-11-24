@@ -102,6 +102,9 @@ export class Devices {
     const entryDomain = new Map<string, string>(entries.map((e: any) => [e.entry_id, e.domain]));
     const areaName = new Map<string, string>(areas.map((a: any) => [a.area_id, a.name]));
     const snap: Snapshot = { devices: [], controls: new Map(), byEntity: new Map(), flows: new Map() };
+    // Alexa lists every speaker on the Amazon account, Sonos speakers among them. Those are better added through Sonos itself
+    // (favourites, grouping, the whole catalogue), and adding both would put the same speaker in the home twice.
+    const twinOf = (integration: string, model: string, name: string) => (integration === "alexa_media" && /sonos/i.test(`${model} ${name}`) ? "Sonos" : undefined);
     this.entriesOf.clear();
 
     for (const d of devs) {
@@ -140,6 +143,7 @@ export class Devices {
         rooms: [],
         suggestedRoom: d.area_id ? areaName.get(d.area_id) : undefined,
         controls,
+        twin: twinOf(integration, String(d.model ?? ""), String(d.name ?? "")),
       });
     }
 

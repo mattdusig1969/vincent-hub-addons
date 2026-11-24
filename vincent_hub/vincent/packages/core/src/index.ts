@@ -48,6 +48,8 @@ export interface Device {
   suggestedRoom?: string;
   /** The controls this device offers. Empty until it is ready. */
   controls: Control[];
+  /** Set when this is a second view of something better added another way (a Sonos speaker that Alexa also lists): the maker to use instead. */
+  twin?: string;
 }
 
 interface ControlBase {
