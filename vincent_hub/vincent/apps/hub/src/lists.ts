@@ -18,6 +18,27 @@ export class Lists {
     if (!e) throw new Error("That list is gone.");
     return e;
   }
+  idOf(entityId: string): string { return idOf(entityId); }
+
+  /** Every item in one list, by the list's own name on the hub. */
+  async raw(entity: string): Promise<{ uid: string; text: string; done: boolean }[]> {
+    const r = await this.ha.call({ type: "call_service", domain: "todo", service: "get_items", service_data: {}, target: { entity_id: entity }, return_response: true });
+    return ((r?.response?.[entity]?.items ?? []) as { uid: string; summary: string; status: string }[]).map((i) => ({ uid: i.uid, text: String(i.summary ?? ""), done: i.status === "completed" }));
+  }
+
+  async rename(entity: string, uid: string, text: string): Promise<void> { await this.ha.service("todo", "update_item", entity, { item: uid, rename: text.trim().slice(0, 200) }); }
+
+  /** The list called this (give or take "list" on the end). With `make`, one is made when the home has none. */
+  async entityNamed(name: string, make: boolean): Promise<string | undefined> {
+    const flat = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/list$/, "");
+    const find = () => this.entities().find((e) => flat(String(this.ha.states.get(e)?.attributes.friendly_name ?? "")) === flat(name));
+    let e = find();
+    if (e || !make) return e;
+    await this.create(name);
+    for (let i = 0; i < 20 && !(e = find()); i++) await new Promise((r) => setTimeout(r, 250));
+    return e;
+  }
+
   shows(entityId: string): boolean { return entityId.startsWith("todo."); }
 
   all(): ListSummary[] {

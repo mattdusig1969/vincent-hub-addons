@@ -11,7 +11,13 @@ import type { ControlRequest, ListStatus, Palette, Reminder, Repeat, Room, RoomK
 /** The parts of the look one phone or tablet may choose for itself. Anything left out follows the home. */
 export interface DeviceLook { theme?: string; palette?: Palette; style?: string; custom?: { font: string; shape: string; outfits?: Record<string, string> }; character?: string; rotate?: string; voices?: Record<string, { locale: string; voice: string }> }
 
+/** One thing kept in step with Apple Reminders, as both sides stood when last matched. */
+export interface AppleRow { /** Apple's id; "" while the phone has yet to make it there. */ a: string; ref?: string; /** The Apple list. */ l: string; kind: "item" | "rem"; /** The home's id for it: a list item, or a reminder. */ v: string; text: string; done: boolean; at?: string; repeat?: Repeat; /** It repeats on Apple in a way Vincent has no word for; its repeating is left to Apple. */ odd?: boolean }
+export interface AppleSaved { lists: Record<string, { name: string; /** Shared with the home, or this device's own reminders only. */ share: boolean; entity?: string }>; /** The Apple list that reminders made on this device are copied to. */ into: string; rows: AppleRow[]; at?: string }
+
 interface Saved {
+  /** Apple Reminders, by the phone or tablet that set it up. */
+  apple?: Record<string, AppleSaved>;
   /** device id -> added | ignored. Absent = found. */
   devices: Record<string, "added" | "ignored">;
   /** Integrations the household said yes to: every device they bring is added. */
@@ -312,9 +318,15 @@ export const store = {
   /** The reminders one device sees: the home's, and its own. Finished ones are kept a month. */
   reminders(deviceId: string): Reminder[] {
     const old = Date.now() - 30 * 86_400_000;
-    return (saved.reminders ?? []).filter((r) => (!r.for || r.for === deviceId) && !(r.done && Date.parse(r.done) < old)).map((r) => ({ ...r, mine: r.for === deviceId }));
+    // One this device's own Apple Reminders also holds is rung by Apple there; Vincent stays quiet about it on that device.
+    const held = new Set((saved.apple?.[deviceId]?.rows ?? []).filter((r) => r.kind === "rem" && r.a).map((r) => r.v));
+    return (saved.reminders ?? []).filter((r) => (!r.for || r.for === deviceId) && !(r.done && Date.parse(r.done) < old)).map(({ made: _m, ...r }) => ({ ...r, mine: r.for === deviceId, ...(held.has(r.id) ? { quiet: true } : {}) }));
   },
-  addReminder(r: { text: string; at: string; repeat: Repeat; for: string; by: string }): Reminder {
+  get allReminders(): Reminder[] { return saved.reminders ?? []; },
+  setReminders(all: Reminder[]): void { saved.reminders = all.slice(-600); save(); },
+  appleOf(deviceId: string): AppleSaved | undefined { const a = saved.apple?.[deviceId]; return a && { ...a, lists: { ...a.lists }, rows: a.rows.map((r) => ({ ...r })) }; },
+  setApple(deviceId: string, a: AppleSaved | null): void { const all = { ...saved.apple }; if (a) all[deviceId] = a; else delete all[deviceId]; saved.apple = all; save(); },
+  addReminder(r: { text: string; at: string; repeat: Repeat; for: string; by: string; made?: string }): Reminder {
     const made: Reminder = { id: randomBytes(6).toString("hex"), ...r };
     saved.reminders = [...(saved.reminders ?? []), made].slice(-300); save();
     return made;

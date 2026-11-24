@@ -61,6 +61,7 @@ import { Intercom } from "./intercom.ts";
 import { Talk, TalkRefusal, type TalkDeps } from "./talk.ts";
 import { Place } from "./place.ts";
 import { Lists } from "./lists.ts";
+import { Apple } from "./apple.ts";
 import { Portraits, pictureType } from "./portraits.ts";
 import { dir as dataDir } from "./store.ts";
 import { Flows } from "./flows.ts";
@@ -87,6 +88,7 @@ const scenesNow = async (): Promise<Scene[]> => { const list = store.scenes(); i
 const intercom = new Intercom((id) => store.rooms().find((r) => r.id === id)?.name ?? "");
 const place = new Place(ha);
 const lists = new Lists(ha);
+const apple = new Apple(lists);
 const repeatOf = (v: unknown): Repeat => (["day", "weekdays", "week", "month", "year"].includes(String(v)) ? (String(v) as Repeat) : "");
 const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
 const flows = new Flows(ha, devices);
@@ -401,10 +403,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return json(res, 200, {
       // A player showing no picture of its own (a radio station) wears the picture of what was started on it.
       devices: (await devices.all()).map((d) => (d.controls.some((c) => c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id)) ? { ...d, controls: d.controls.map((c) => (c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id) ? { ...c, art: media.artFor(c.id) } : c)) } : d)), rooms: store.rooms(), theme: mine.theme ?? store.theme, palette: mine.palette ?? store.palette, style: mine.style ?? store.style, custom: mine.custom ?? store.custom, rotate: mine.rotate ?? store.rotate, character: mine.character ?? store.character, look: { owner: store.isOwner(key), own: Object.keys(mine).length > 0 }, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = mine.voices?.[c.id] ?? store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: await scenesNow(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
-      weather: place.weather(), lists: lists.all(), reminders: store.reminders(me.id), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
+      weather: place.weather(), lists: lists.all(), reminders: store.reminders(me.id), apple: { can: true, ...apple.chosen(me.id) }, place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   // A device's own look. The home's look belongs to the owner's device (set in /api/home, with the PIN); every other
   // phone or tablet starts on it, and may change its own without a PIN. What it never changed keeps following the home.
+  // A wake word was heard on a phone or tablet. Kept in the hub's log only, to see how well it is working.
+  if (m === "POST" && path === "/api/wake") { const b = await body(req); console.log(`[wake] ${me.name}: "hey ${String(b.who ?? "").slice(0, 20)}"${b.said ? ` then "${String(b.said).slice(0, 80)}"` : ""}`); return json(res, 200, { ok: true }); }
   // Starred music: kept on the hub so a person's phone and tablet show the same list.
   if (path === "/api/stars") {
     if (m === "POST") {
@@ -544,7 +548,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req), text = String(b.text ?? "").trim().slice(0, 200), at = new Date(String(b.at ?? ""));
     if (b.op === "clear") { store.clearReminders(me.id); changed(); return json(res, 200, { ok: true }); }
     if (!text || Number.isNaN(at.getTime())) return json(res, 400, { error: "A reminder needs something to remember, and a time." });
-    store.addReminder({ text, at: at.toISOString(), repeat: repeatOf(b.repeat), for: b.mine ? me.id : "", by: me.person || me.name });
+    store.addReminder({ text, at: at.toISOString(), repeat: repeatOf(b.repeat), for: b.mine ? me.id : "", by: me.person || me.name, made: me.id });
     if (!b.mine) say(`Set the reminder "${text.slice(0, 60)}"`);
     changed(); return json(res, 200, { ok: true });
   }
@@ -564,6 +568,10 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (b.op === "remove" && !was.for) say(`Removed the reminder "${was.text.slice(0, 60)}"`);
     changed(); return json(res, 200, { ok: true });
   }
+  // Apple Reminders, set up on each phone by itself. The phone hands over its chosen lists; the hub answers with what to change on Apple's side.
+  if (m === "POST" && path === "/api/apple") { const b = await body(req); apple.choose(me.id, b.lists ?? {}, String(b.into ?? "")); changed(); return json(res, 200, { ok: true }); }
+  if (m === "POST" && path === "/api/apple/sync") { const r = await apple.sync(me.id, me.person || me.name, JSON.parse((await raw(req, 2_000_000)).toString("utf8") || "{}").lists); if (r.changed) { devices.invalidate(); changed(); } return json(res, 200, { ops: r.ops }); }
+  if (m === "POST" && path === "/api/apple/made") { apple.made(me.id, (await body(req)).made ?? {}); return json(res, 200, { ok: true }); }
   const li = /^\/api\/lists\/([a-f0-9]+)$/.exec(path);
   if (li && m === "GET") return json(res, 200, await lists.items(li[1]));
   if (li && m === "POST") { await lists.change(li[1], await body(req)); changed(); return json(res, 200, { ok: true }); }

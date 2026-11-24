@@ -16,6 +16,10 @@ export interface Reminder {
   done?: string;
   /** True when it belongs to the device asking. */
   mine?: boolean;
+  /** The device that made it (kept on the hub). */
+  made?: string;
+  /** True when the asking device's own Apple Reminders holds it too: Apple rings it there, so Vincent does not. */
+  quiet?: boolean;
 }
 
 export const REPEATS: { id: Repeat; name: string; short: string }[] = [
