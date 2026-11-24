@@ -25,6 +25,8 @@ interface Saved {
   /** The hub's own Home Assistant login, so the household is never locked out of it. */
   ha?: { username: string; password: string };
   /** Phones and tablets allowed to talk to this home: sha-256 of each one's key -> its name. */
+  /** Starred music, by whose it is ("p:<person>" or "d:<device>"). */
+  stars?: Record<string, unknown[]>;
   paired?: Record<string, { name: string; since: string; person?: string; /** What this device may not control (rule ids). */ deny?: string[]; /** Set on the device that set the home up: its look is the home's look. */ owner?: boolean; /** This device's own look, where it differs from the home's. */ look?: DeviceLook }>;
   /** The PIN that lets a new phone or tablet join. Not the admin PIN: it opens no settings. Kept readable so the owner can look it up. */
   joinPin?: string;
@@ -161,6 +163,10 @@ export const store = {
     return all.sort((a, b) => a[1].since.localeCompare(b[1].since))[0]?.[0] === h;
   },
   /** This device's own look: only what it chose differently from the home. */
+  /** Starred music belongs to a person: every phone and tablet with the same person's name shares one list. A device with no person keeps its own. */
+  starsOwner(key: string): string { const d = saved.paired?.[sha(key)]; return d?.person ? `p:${d.person.trim().toLowerCase()}` : `d:${sha(key).slice(0, 16)}`; },
+  starsOf(key: string): unknown[] | undefined { return saved.stars?.[this.starsOwner(key)]; },
+  setStars(key: string, list: unknown[]): void { (saved.stars ??= {})[this.starsOwner(key)] = list.slice(0, 200); save(); },
   lookOf(key: string): DeviceLook { return saved.paired?.[sha(key)]?.look ?? {}; },
   setLook(key: string, look: DeviceLook | null): void {
     const d = saved.paired?.[sha(key)];

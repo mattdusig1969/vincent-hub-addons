@@ -392,6 +392,17 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     });
   // A device's own look. The home's look belongs to the owner's device (set in /api/home, with the PIN); every other
   // phone or tablet starts on it, and may change its own without a PIN. What it never changed keeps following the home.
+  // Starred music: kept on the hub so a person's phone and tablet show the same list.
+  if (path === "/api/stars") {
+    if (m === "POST") {
+      const b = await body(req);
+      const list = (Array.isArray(b.stars) ? b.stars : []).filter((x: any) => x && typeof x.kind === "string" && typeof x.id === "string" && typeof x.title === "string")
+        .map((x: any) => ({ kind: x.kind, id: String(x.id).slice(0, 300), title: String(x.title).slice(0, 200), ...(typeof x.subtitle === "string" ? { subtitle: x.subtitle.slice(0, 200) } : {}), ...(typeof x.art === "string" ? { art: x.art.slice(0, 500) } : {}), ...(x.opens ? { opens: true } : {}), ...(x.plays === false ? { plays: false } : {}) }));
+      store.setStars(key, list);
+      return json(res, 200, { ok: true });
+    }
+    return json(res, 200, { stars: store.starsOf(key) ?? null, person: store.device(key)?.person ?? "" });
+  }
   if (m === "POST" && path === "/api/look") {
     const b = await body(req);
     if (b.reset === true) { store.setLook(key, null); changed(); return json(res, 200, { ok: true }); }
