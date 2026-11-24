@@ -116,7 +116,7 @@ let matter: { state: "idle" | "working" | "done" | "failed"; message: string; br
 
 /** Why a Matter code did not work, in plain words. */
 function matterWhy(m: string): string {
-  if (/No commissionable device/i.test(m)) return "No device answered that code. It must be switched on and on your Wi-Fi, and the code freshly made in its maker's app (codes last a few minutes).";
+  if (/No commissionable device/i.test(m)) return "No device on your Wi-Fi is waiting to be added. If it is already in another smart home (Apple Home, Google Home, Alexa, another hub), that app has to make a fresh code for it: its own printed code no longer works. If it is new, switch it off and on, then try again within 15 minutes.";
   if (/unknown command|not loaded|not found/i.test(m)) return keeper ? "Matter on this hub had stopped. Vincent is putting it right: try your code again in a few minutes." : "Matter is not ready on this hub yet.";
   if (/timeout|did not answer/i.test(m)) return "The device did not answer. It must be switched on, on your Wi-Fi, and its code freshly made in the maker's app.";
   return "That code was not accepted. Codes last only a few minutes: make a new one in the maker's app and try again.";

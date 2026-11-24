@@ -24,14 +24,14 @@ const FROM_APPLE = ["Open the Home app on your iPhone and press and hold the dev
 const FROM_GOOGLE = ["Open the Google Home app, tap Devices, then press and hold the device's tile.", "Tap the gear, then Linked Matter apps & services.", "Tap Link apps & services, then Use pairing code.", "Enter the code here straight away: Google's code lasts about three minutes."];
 const FROM_ALEXA = ["Open the Alexa app, tap Devices and choose the device.", "Tap the gear, then Other Assistants and Apps.", "Tap Add Another. An 11-digit code appears; enter it here."];
 const FROM_SMARTTHINGS = ["Open the SmartThings app and tap the device.", "Tap the three dots at the top right, then Share with other services.", "Choose Share (or Share device) and use the number under the square code."];
-const FIRST_APP = "If you set it up in Apple Home, Google Home or Alexa, that app makes the code: choose \"Already in Apple Home\", \"Already in Google Home\" or \"Already in Alexa\" from the brand list for the steps.";
+const FIRST_APP = "If it is already in Apple Home, Google Home or Alexa, its own code stops working and that app makes a new one: choose \"Already in Apple Home\", \"Already in Google Home\" or \"Already in Alexa\" from the brand list for the steps.";
 
 export const BRANDS: Entry[] = [
   // Lights
   B("hue", "Philips Hue", "lights", "steps", "hue", "The Hue Bridge must be plugged into your router. You will be asked to press the button on top of the bridge."),
   M(B("govee", "Govee", "lights", "search", "govee_light_local", "Switch the light on. In the Govee app, open the light's settings and turn on LAN Control, then search. Lights with the Matter badge can be added with their code instead.", "matter"),
     "For Govee lights with the Matter badge on the box.",
-    ["Open the Govee Home app and tap the light.", "Tap the gear at the top right.", "Scroll down to Other and tap Matter. The light's code appears.", "Enter that code here.", FIRST_APP]),
+    ["Open the Govee Home app and tap the light.", "Tap the gear at the top right.", "Scroll down to Other and tap Matter. The light's code appears.", "Enter that code here. If nothing is found, switch the light off and on at the wall and try again within 15 minutes.", FIRST_APP]),
   B("lifx", "LIFX", "lights", "search", "lifx", "Switch the light on at the wall. It must already be set up in the LIFX app and on your Wi-Fi."),
   M(B("kasa", "TP-Link Kasa and Tapo", "lights", "steps", "tplink", "Leave the address empty to search. Newer devices ask for your TP-Link account so the hub can talk to them directly. Models with the Matter badge can be added with a code instead.", "matter"),
     "For Tapo and Kasa models with the Matter badge (model numbers usually end in M).",
