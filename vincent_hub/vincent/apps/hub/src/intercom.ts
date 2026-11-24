@@ -30,9 +30,11 @@ export class Intercom {
   constructor(roomName: (id: string) => string) { this.roomName = roomName; }
 
   /** An app came to the front. Returns how to hang up the line. */
-  listen(device: { id: string; name: string }, room: string, send: Screen["send"]): () => void {
+  listen(device: { id: string; name: string; person?: string }, room: string, send: Screen["send"]): () => void {
     const line = randomBytes(8).toString("hex");
-    const screen: Screen = { line, ...device, room: this.roomName(room) ? room : "", send };
+    // Somebody's own phone is reached by its name, wherever it happens to open ("Matt's phone" is not "the office").
+    // A shared screen with a room (a wall tablet) is reached as that room.
+    const screen: Screen = { line, id: device.id, name: device.name, room: !device.person && this.roomName(room) ? room : "", send };
     this.screens.set(line, screen);
     send("hello", { line });
     this.tellPlaces();

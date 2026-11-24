@@ -264,8 +264,13 @@ export class Media {
 
   // ── playing ──
 
-  async play(controlId: string, item: { kind?: string; id?: string; title?: string }): Promise<void> {
+  /** The picture of what was last started on a player, for sources that give the speaker none of their own (a radio station). */
+  private lastArt = new Map<string, string>();
+  artFor(controlId: string): string | undefined { return this.lastArt.get(controlId); }
+
+  async play(controlId: string, item: { kind?: string; id?: string; title?: string; art?: string }): Promise<void> {
     const p = await this.devices.player(controlId);
+    if (item.art && /^\/api\//.test(item.art)) this.lastArt.set(controlId, item.art); else this.lastArt.delete(controlId);
     const id = String(item.id ?? "");
     if (!id) throw new Error("Nothing was chosen to play.");
     const play = (type: string, content: string) => this.ha.service("media_player", "play_media", p.entityId, { media_content_type: type, media_content_id: content });

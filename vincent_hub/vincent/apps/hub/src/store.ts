@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { ControlRequest, ListStatus, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
+import type { ControlRequest, ListStatus, Reminder, Repeat, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
 
 /** The parts of the look one phone or tablet may choose for itself. Anything left out follows the home. */
 export interface DeviceLook { theme?: string; style?: string; custom?: { font: string; shape: string; outfits?: Record<string, string> }; character?: string; rotate?: string; voices?: Record<string, { locale: string; voice: string }> }
@@ -38,8 +38,12 @@ interface Saved {
   scenesRefused?: string[];
   /** Colours the household mixed on the wheel and kept, offered on every colour light. */
   colors?: number[];
+  /** Things to remember at a date and time. `for` = the one device it belongs to, or "" for everyone. */
+  reminders?: Reminder[];
   /** scene id -> the home's date it last ran by itself, so a schedule fires once a day even across a restart. */
   scenesRan?: Record<string, string>;
+  /** True once the home has been given its Everything off scene. */
+  everythingOff?: boolean;
   /** device id -> room ids */
   deviceRooms?: Record<string, string[]>;
   /** device id -> the household's own name for it. The device itself keeps its name. */
@@ -221,7 +225,16 @@ export const store = {
     save();
   },
   // Scenes
-  scenes(): Scene[] { return saved.scenes ?? []; },
+  /** Every home starts with one whole-home scene, Everything off. Made once; if the household removes it, it stays removed. */
+  scenes(): Scene[] {
+    if (saved.pin && !saved.everythingOff) {
+      saved.everythingOff = true;
+      const list = (saved.scenes ??= []);
+      if (!list.some((s) => !s.room && /^(everything|all) off$/i.test(s.name.trim()))) list.unshift({ id: "everything-off", name: "Everything off", room: "", icon: "off", steps: [], auto: "off" });
+      save();
+    }
+    return saved.scenes ?? [];
+  },
   get scenesRefused(): string[] { return saved.scenesRefused ?? []; },
   /** Saves a new scene (no id) or changes one. Returns its id, or "" when the one to change is gone. */
   saveScene(sc: { id?: string; name: string; room: string; icon: string; steps: ControlRequest[]; when?: SceneWhen }): string {
@@ -279,6 +292,25 @@ export const store = {
   keepColor(rgb: number): void { saved.colors = [...(saved.colors ?? []).filter((c) => c !== rgb), rgb].slice(-12); save(); },
   dropColor(rgb: number): void { saved.colors = (saved.colors ?? []).filter((c) => c !== rgb); save(); },
   clearVoices(): void { saved.voices = {}; save(); },
+  /** The reminders one device sees: the home's, and its own. Finished ones are kept a month. */
+  reminders(deviceId: string): Reminder[] {
+    const old = Date.now() - 30 * 86_400_000;
+    return (saved.reminders ?? []).filter((r) => (!r.for || r.for === deviceId) && !(r.done && Date.parse(r.done) < old)).map((r) => ({ ...r, mine: r.for === deviceId }));
+  },
+  addReminder(r: { text: string; at: string; repeat: Repeat; for: string; by: string }): Reminder {
+    const made: Reminder = { id: randomBytes(6).toString("hex"), ...r };
+    saved.reminders = [...(saved.reminders ?? []), made].slice(-300); save();
+    return made;
+  },
+  /** Changes one reminder a device may see. Returns it as it was, or undefined when it is not theirs to change. */
+  changeReminder(deviceId: string, id: string, change: (r: Reminder) => Reminder | null): Reminder | undefined {
+    const was = (saved.reminders ?? []).find((r) => r.id === id && (!r.for || r.for === deviceId));
+    if (!was) return undefined;
+    const now = change({ ...was });
+    saved.reminders = (saved.reminders ?? []).flatMap((r) => (r.id === id ? (now ? [now] : []) : [r])); save();
+    return was;
+  },
+  clearReminders(deviceId: string): void { saved.reminders = (saved.reminders ?? []).filter((r) => !(r.done && (!r.for || r.for === deviceId))); save(); },
   setVoice(character: string, v: { locale: string; voice: string }): void { saved.voices = { ...saved.voices, [character]: v }; save(); },
   get place(): SavedPlace | undefined { return saved.place; },
   setPlace(p: SavedPlace): void { saved.place = { ...saved.place, ...p }; save(); },

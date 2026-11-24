@@ -215,7 +215,8 @@ export class Talk {
         generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice.voice } }, languageCode: voice.locale } },
         systemInstruction: { parts: [{ text: system }] },
         tools: [{ functionDeclarations: [...TOOLS[0].functionDeclarations, { name: "look_at_house", description: "The state of the whole house this minute: every device, what is playing, the weather. Call before answering about the house." }] }],
-        inputAudioTranscription: {}, outputAudioTranscription: {},
+        // The written words are told which language to expect: left to guess, the service now and then writes a word in another one.
+        inputAudioTranscription: { languageCodes: [voice.locale] }, outputAudioTranscription: { languageCodes: [voice.locale] },
       },
     };
   }

@@ -21,6 +21,8 @@ export interface Scene {
   steps: ControlRequest[];
   /** When it runs by itself, if it does. */
   when?: SceneWhen;
+  /** "off" = the home's own Everything off: its steps are worked out afresh each time, so lights and speakers added later are included. */
+  auto?: "off";
 }
 
 /** A scene's schedule: a time of day, or the sun, on chosen days. */
@@ -155,6 +157,12 @@ const same = (a: ControlRequest[], b: ControlRequest[]) => {
   return key(a) === key(b);
 };
 
+/** Everything off, for the whole home as it is now: every light (and lamp on a plug) off, every speaker and television paused. */
+export function everythingOff(devices: Device[]): ControlRequest[] {
+  const parts = partsOf(devices, WHOLE_HOME);
+  return [...parts.filter(isLight).map(off), ...parts.filter((p) => p.c.kind === "media").map(hush)];
+}
+
 /**
  * The scenes worth offering for one room (or WHOLE_HOME), given what is in it.
  * Never one the household already has, said no to, or that would do the same as another.
@@ -184,7 +192,8 @@ export function sceneIdeas(room: string, rooms: Room[], devices: Device[], scene
   if (all.lights.length >= 2 || all.locks.length)
     offer("goodnight", "Good night", "bed", [...sleep(all), ...all.locks.map((p): ControlRequest => ({ id: p.c.id, action: "lock" }))]);
   if (all.lights.length >= 2) {
-    offer("alloff", "All off", "off", allOff(all));
+    // The home comes with Everything off; "All off" is only offered where that was removed.
+    if (!scenes.some((s) => s.room === WHOLE_HOME && (s.auto === "off" || /^(everything|all) off$/i.test(s.name.trim())))) offer("alloff", "All off", "off", allOff(all));
     offer("allon", "All on", "sun", bright(all));
   }
   const lived = inKinds("living", "kitchen");
