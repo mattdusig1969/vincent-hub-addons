@@ -90,10 +90,8 @@ const flows = new Flows(ha, devices);
 // Echo speakers need a part the hub fetches once; and Amazon's sign-in page is shown from Home Assistant's own address.
 const echo = new Echo(ha, (method, path, data, timeout) => supervisor(method, path, timeout ?? 60_000, data));
 flows.preparers[ECHO_DRIVER] = echo;
-flows.haUrl = async (host) => {
-  const info = await supervisor("GET", "/core/info").catch(() => ({} as any));
-  return `${info.ssl ? "https" : "http"}://${host.replace(/:\d+$/, "")}:${info.port ?? 8123}`;
-};
+// Amazon's sign-in page is asked for at the hub's own address (see `amazon` below), the one this phone already reaches it by.
+flows.haUrl = async (host) => `http://${host}`;
 // A found device with nothing to ask is answered with a plain yes; anything more goes to the app as a question.
 devices.steps = async (flowId, handler, rooms) => {
   const first = await flows.startFound(flowId, handler, rooms);
@@ -854,9 +852,46 @@ async function page(res: ServerResponse, path: string): Promise<void> {
   res.end(await readFile(file));
 }
 
+/** Home Assistant's own web address as this service reaches it (for its pages, which are not under its API). */
+let haWeb = "";
+async function haAddress(): Promise<string> {
+  if (haWeb) return haWeb;
+  if (process.env.SUPERVISOR_TOKEN) { const info = await supervisor("GET", "/core/info"); haWeb = `${info.ssl ? "https" : "http"}://homeassistant:${info.port ?? 8123}`; }
+  else haWeb = String(JSON.parse(readFileSync(new URL("../dev-hub.json", import.meta.url), "utf8")).url).replace(/\/$/, "");
+  return haWeb;
+}
+const SIGNED_IN = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Signed in</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4efe6;color:#2a2622;font-family:-apple-system,system-ui,sans-serif;text-align:center}
+main{padding:32px}.m{width:72px;height:72px;margin:0 auto 20px;border-radius:50%;background:#2a2622;color:#f4efe6;display:grid;place-items:center;font:600 34px Georgia,serif}
+h1{font:500 28px Georgia,serif;margin:0 0 10px}p{margin:0;color:#6f675d;font-size:17px;line-height:1.4}</style></head>
+<body><main><div class="m">V</div><h1>You are signed in</h1><p>Vincent is collecting your Echo speakers.<br>You can go back to the Vincent app.</p></main></body></html>`;
+
+/**
+ * Amazon's sign-in for Echo speakers. Home Assistant shows Amazon's page from its own address; the hub passes it through
+ * from the hub's address instead, so it sees the moment the sign-in finishes and can show its own closing page.
+ */
+async function amazon(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? "/", "http://hub");
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(req.headers)) if (v !== undefined && !["host", "connection", "content-length", "accept-encoding"].includes(k)) headers[k] = Array.isArray(v) ? v.join(", ") : v;
+  const r = await fetch((await haAddress()) + url.pathname + url.search, { method: req.method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined, redirect: "manual", signal: AbortSignal.timeout(150_000) });
+  const done = url.pathname === "/auth/alexamedia/callback" && r.status === 200;
+  const out = done ? Buffer.from(SIGNED_IN) : Buffer.from(await r.arrayBuffer());
+  for (const [k, v] of r.headers) if (!["content-encoding", "content-length", "transfer-encoding", "connection", "set-cookie"].includes(k)) res.setHeader(k, v);
+  const cookies = r.headers.getSetCookie?.() ?? [];
+  if (cookies.length) res.setHeader("set-cookie", cookies);
+  if (done) { res.setHeader("content-type", "text/html; charset=utf-8"); const id = url.searchParams.get("flow_id"); if (id) flows.linkDone(id); console.log("[echo] Amazon sign-in finished"); }
+  res.writeHead(r.status);
+  res.end(out);
+}
+
 createServer((req, res) => {
   const path = new URL(req.url ?? "/", "http://hub").pathname;
-  const run = path.startsWith("/api/") ? api(req, res, path) : page(res, path);
+  // Amazon's page also asks for things by bare paths; anything asked for from inside that page goes the same way.
+  const fromAmazon = !path.startsWith("/api/") && String(req.headers.referer ?? "").includes("/auth/alexamedia/");
+  const run = path.startsWith("/auth/alexamedia/") || fromAmazon ? amazon(req, res) : path.startsWith("/api/") ? api(req, res, path) : page(res, path);
   run.catch((e: Error) => {
     console.log(`[api] ${req.method} ${path} failed: ${e.message}`);
     if (!res.headersSent) json(res, 400, { error: e.message });

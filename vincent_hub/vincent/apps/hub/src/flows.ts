@@ -68,6 +68,8 @@ export class Flows {
   haUrl?: (host: string) => Promise<string>;
   /** Sign-ins whose website visit has finished (Home Assistant says so; asking it before then would end the visit early). */
   private finished = new Set<string>();
+  /** The hub saw the website visit finish (the closing page was asked for). */
+  linkDone(flowId: string): void { this.finished.add(flowId); }
   private unlisten?: () => void;
   /** Subscribed afresh for each visit: a subscription does not survive Home Assistant restarting. */
   private async listen(): Promise<void> {
@@ -203,7 +205,7 @@ export class Flows {
           this.finished.delete(id);
           const before = this.open.get(id);
           this.open.set(id, { domain, rooms, fields: [], menu: false, tips, name, link: true, hassUrl: before?.hassUrl });
-          const step: Step = { kind: "link", flow: id, url: String(r.url), title: name ?? "Amazon", text: "Amazon's own sign-in page opens next. Sign in there the way you always do. If Amazon texts you a code, type it on that page. When it says you are done, come back here.", fields: [] };
+          const step: Step = { kind: "link", flow: id, url: String(r.url), title: name ?? "Amazon", text: "Amazon's sign-in opens next, shown through your hub. Sign in the way you always do. If Amazon texts you a code, type it there. Vincent carries on by itself when you are done.", fields: [] };
           this.last.set(id, step);
           return step;
         }
@@ -238,7 +240,7 @@ export class Flows {
           ];
         }
         this.open.set(id!, { domain, rooms, fields, menu: false, tips, name, step: String(r.step_id ?? ""), hassUrl: this.open.get(id!)?.hassUrl });
-        const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's own sign-in page opens next. You type your email and password there, on Amazon's page, and a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
+        const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's sign-in opens next. You type your email and password there, and a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
         this.last.set(id!, step);
         return step;
       }
