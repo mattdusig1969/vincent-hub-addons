@@ -179,6 +179,8 @@ setInterval(async () => {
 }, 30_000);
 
 ha.start();
+// A first look at the home network soon after starting, so the answer is ready when someone opens Add a device.
+setTimeout(() => { network.seen().catch(() => undefined); }, 20_000);
 keeper?.start();
 
 // The app is not always served from here (the iPhone app carries its own copy), so any origin may ask,
