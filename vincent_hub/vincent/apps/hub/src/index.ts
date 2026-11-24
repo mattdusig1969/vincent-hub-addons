@@ -690,6 +690,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     say(b.everyone === true ? "Made this device's look the home's look, for every device" : "Made this device's look the home's look");
     return done();
   }
+  if (path === "/api/look/send") {
+    const ids = ((await body(req)).devices ?? []) as unknown[];
+    const names = store.clearLookOf((Array.isArray(ids) ? ids : []).map(String));
+    if (names.length) say(`Sent the home's look to ${names.join(", ")}`.slice(0, 200));
+    return done();
+  }
   if (path === "/api/join-rules") {
     const asked = (await body(req)).deny;
     const deny = (Array.isArray(asked) ? asked : []).map(String).filter((d: string) => RULES.some((r) => r.id === d));

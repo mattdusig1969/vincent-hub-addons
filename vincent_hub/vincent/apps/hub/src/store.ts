@@ -136,8 +136,15 @@ export const store = {
   /** The phone or tablet a key belongs to: a short id that never changes, and the name it was given when it joined. */
   device(key: string): { id: string; name: string; person: string; deny: string[] } | undefined { const h = sha(key), d = saved.paired?.[h]; return d ? { id: h.slice(0, 16), name: d.name, person: d.person ?? "", deny: d.deny ?? [] } : undefined; },
   /** Every phone and tablet that has joined, oldest first. */
-  phones(): { id: string; name: string; person: string; since: string; deny: string[] }[] {
-    return Object.entries(saved.paired ?? {}).map(([h, d]) => ({ id: h.slice(0, 16), name: d.name, person: d.person ?? "", since: d.since, deny: d.deny ?? [] })).sort((a, b) => a.since.localeCompare(b.since));
+  phones(): { id: string; name: string; person: string; since: string; deny: string[]; ownLook: boolean }[] {
+    return Object.entries(saved.paired ?? {}).map(([h, d]) => ({ id: h.slice(0, 16), name: d.name, person: d.person ?? "", since: d.since, deny: d.deny ?? [], ownLook: !!d.look && Object.keys(d.look).length > 0 })).sort((a, b) => a.since.localeCompare(b.since));
+  },
+  /** Puts the chosen devices back on the home's look. Returns their names. */
+  clearLookOf(ids: string[]): string[] {
+    const names: string[] = [];
+    for (const [h, d] of Object.entries(saved.paired ?? {})) if (ids.includes(h.slice(0, 16))) { delete d.look; names.push(d.name); }
+    if (names.length) save();
+    return names;
   },
   /** A phone or tablet says what it is called and who uses it. */
   nameDevice(key: string, name: string, person: string): void {
