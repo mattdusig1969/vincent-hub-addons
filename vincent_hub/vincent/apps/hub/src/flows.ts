@@ -33,13 +33,22 @@ const WHY: Record<string, string> = {
 
 /** These always get our word, whatever the maker calls them: nobody at home says "host". */
 /** Where a maker's own wording leaves people guessing, ours: by driver, then by the field's name. */
-const PLAINER: Record<string, Record<string, { label: string; help: string }>> = {
+const PLAINER: Record<string, Record<string, { label: string; help: string; required?: boolean }>> = {
+  generic: {
+    stream_source: { required: true, label: "The camera's stream address", help: "Starts with rtsp:// and is shown in the camera's own app where you switched the stream on. Type it exactly." },
+    username: { label: "Stream username", help: "Shown beside the address in the camera's app. Not your account email." },
+    password: { label: "Stream password", help: "Shown beside the address in the camera's app." },
+  },
   alexa_devices: {
     username: { label: "Amazon email", help: "The email you sign in to Amazon with." },
     password: { label: "Amazon password", help: "Sent encrypted, straight to Amazon." },
     code: { label: "Six-digit code from your authenticator app", help: "Open your authenticator app (Google Authenticator, Microsoft Authenticator, 1Password or similar), find Amazon, and type the six digits it shows right now. Nothing is texted to you: Amazon only allows an authenticator app for this. No Amazon entry in an authenticator app yet? On amazon.com go to Account, Login and security, Two-step verification, and add an authenticator app first." },
   },
 };
+/** Questions a household cannot answer and need not: left out, the maker's default stands. */
+const HIDDEN: Record<string, string[]> = { generic: ["still_image_url"] };
+/** Technical settings a brand needs set differently from the driver's suggestion: by driver, then by the brand's name. */
+const NESTED: Record<string, Record<string, Record<string, unknown>>> = { generic: { "eufy cameras": { authentication: "digest", rtsp_transport: "tcp" } } };
 const OURS: Record<string, string> = { host: "Address", ip_address: "Address", address: "Address", device_input: "Name or address" };
 
 const plain = (s: string, vars: Record<string, unknown> = {}) =>
@@ -47,7 +56,7 @@ const plain = (s: string, vars: Record<string, unknown> = {}) =>
     .replace(/Home Assistant/g, "Vincent").replace(/\bSubmit\b/g, "Continue").replace(/\b[Tt]he host\b/g, "the address").replace(/\bIP address\b/g, "address").replace(/\n{2,}/g, "\n").trim();
 const titled = (s: string) => s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 
-interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string; step?: string; link?: boolean; hassUrl?: string; prepare?: boolean }
+interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string; step?: string; link?: boolean; hassUrl?: string; prepare?: boolean; nested?: Record<string, Record<string, unknown>> }
 
 /** Something a brand needs on the hub before its sign-in can start (Echo: a part fetched once). */
 export interface Preparer { has(): Promise<boolean>; prepare(): void; state: string; message: string }
@@ -125,6 +134,7 @@ export class Flows {
     const data: Record<string, unknown> = {};
     // Echo: the household is asked three things; the hub fills in where Amazon's page is to be shown from.
     if (o.domain === "alexa_media" && o.step === "user") { data.email = ""; data.password = ""; if (o.hassUrl) data.hass_url = o.hassUrl; }
+    Object.assign(data, o.nested ?? {});
     if (o.menu) data.next_step_id = String(values.choice ?? "");
     else for (const f of o.fields) {
       const v = values[f.name];
@@ -227,7 +237,13 @@ export class Flows {
       }
       case "form": {
         // Optional questions the app has no way to draw (lists of several answers) are left out; the maker's default stands.
-        let fields = ((r.data_schema ?? []) as any[]).filter((e) => e.required || !(e.type === "multi_select" || e.selector?.select?.multiple || e.selector?.select?.custom_value))
+        // A folded-away group of technical settings ("advanced") is not asked: its suggested answers are sent as they stand.
+        const nested: Record<string, Record<string, unknown>> = {};
+        for (const e of (r.data_schema ?? []) as any[]) if (e.type === "expandable") {
+          nested[e.name] = Object.fromEntries(((e.schema ?? []) as any[]).flatMap((x): [string, unknown][] => { const v = x.default ?? x.description?.suggested_value; return v === undefined ? [] : [[x.name, v]]; }));
+          Object.assign(nested[e.name], NESTED[domain]?.[name ?? ""] ?? {});
+        }
+        let fields = ((r.data_schema ?? []) as any[]).filter((e) => e.type !== "expandable" && !HIDDEN[domain]?.includes(e.name)).filter((e) => e.required || !(e.type === "multi_select" || e.selector?.select?.multiple || e.selector?.select?.custom_value))
           .map((e): StepField => field(e, say(`step.${r.step_id}.data.${e.name}`), say(`step.${r.step_id}.data_description.${e.name}`)))
           .map((f): StepField => ({ ...f, ...(PLAINER[String(r.handler)]?.[f.name] ?? {}) }));
         const errors = Object.fromEntries(Object.entries((r.errors ?? {}) as Record<string, string>).map(([k, v]) => [k, plain(WHY[v] ?? say(`error.${v}`) ?? titled(String(v)))]));
@@ -239,7 +255,7 @@ export class Flows {
             { name: "url", label: "Your Amazon site", help: "The Amazon you shop at. It decides which Alexa your speakers belong to.", type: "choice", required: true, value: String(was("url") || "amazon.com"), options: AMAZONS.map(([value, label]) => ({ value, label: `${label} (${value})` })) },
           ];
         }
-        this.open.set(id!, { domain, rooms, fields, menu: false, tips, name, step: String(r.step_id ?? ""), hassUrl: this.open.get(id!)?.hassUrl });
+        this.open.set(id!, { domain, rooms, fields, menu: false, tips, name, step: String(r.step_id ?? ""), hassUrl: this.open.get(id!)?.hassUrl, nested });
         const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's sign-in opens next. You type your email and password there, and a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
         this.last.set(id!, step);
         return step;
