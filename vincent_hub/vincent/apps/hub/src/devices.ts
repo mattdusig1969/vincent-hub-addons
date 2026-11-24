@@ -131,11 +131,16 @@ export class Devices {
       if (!controls.length) continue; // nothing the app could do with it
       const entryIds = d.config_entries as string[];
       this.entriesOf.set(d.id, entryIds);
+      // A camera added by its stream address is named after that address and made by "Generic". Its network address says who really made it.
+      const own = String(d.name_by_user || d.name || "");
+      const at = integration === "generic" ? /^(\d{1,3})[._](\d{1,3})[._](\d{1,3})[._](\d{1,3})$/.exec(own.trim()) : null;
+      const madeBy = integration === "generic" ? (at && this.makerAt?.(at.slice(1).join("."))) || "" : "";
+      const plain = integration === "generic" && (at || !own) ? `${madeBy || "Stream"} camera` : "";
       snap.devices.push({
         id: d.id,
-        name: d.name_by_user || d.name || d.model || "Unnamed device",
-        makerName: d.name_by_user || d.name || d.model || "Unnamed device",
-        maker: d.manufacturer || titled(integration),
+        name: plain || d.name_by_user || d.name || d.model || "Unnamed device",
+        makerName: plain || d.name_by_user || d.name || d.model || "Unnamed device",
+        maker: madeBy || (integration === "generic" ? "Camera" : d.manufacturer || titled(integration)),
         model: d.model || "",
         category: best!.category,
         status: "found",
@@ -188,6 +193,8 @@ export class Devices {
     return { ok: false, step };
   }
 
+  /** Set by the hub service: who made the device at a home address, when its network address tells. */
+  makerAt?: (ip: string) => string | undefined;
   /** Set by the hub service: walks a waiting discovery through its maker's questions. */
   steps?: (flowId: string, handler: string, rooms: string[]) => Promise<import("../../../packages/core/src/index.ts").Step>;
 

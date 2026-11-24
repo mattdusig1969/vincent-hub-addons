@@ -91,6 +91,7 @@ const repeatOf = (v: unknown): Repeat => (["day", "weekdays", "week", "month", "
 const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
 const flows = new Flows(ha, devices);
 const network = new Network(ha);
+devices.makerAt = (ip) => network.makerAt(ip);
 // Echo speakers need a part the hub fetches once; and Amazon's sign-in page is shown from Home Assistant's own address.
 const echo = new Echo(ha, (method, path, data, timeout) => supervisor(method, path, timeout ?? 60_000, data));
 flows.preparers[ECHO_DRIVER] = echo;

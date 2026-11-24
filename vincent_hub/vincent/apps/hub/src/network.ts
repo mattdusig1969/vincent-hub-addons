@@ -43,6 +43,9 @@ export class Network {
   private last: Seen[] = [];
   private at = 0;
   private running?: Promise<void>;
+  private makerByIp = new Map<string, string>(); // home address -> maker, for devices that do not say who made them
+  /** Who made the device at this address, when its network address tells. A camera added by its stream address has no other name. */
+  makerAt(ip: string): string | undefined { return this.makerByIp.get(ip); }
   private listening = false;
 
   constructor(ha: Ha) { this.ha = ha; }
@@ -134,7 +137,15 @@ export class Network {
     }
     const macs = new Set<string>();
     const text = await readFile("/proc/net/arp", "utf8").catch(() => new Promise<string>((ok) => execFile("arp", ["-an"], (_e, out) => ok(out ?? ""))));
-    for (const m of text.matchAll(/\b([0-9a-f]{1,2}(?::[0-9a-f]{1,2}){5})\b/gi)) { const c = clean(m[1]); if (c !== "000000000000" && c !== "ffffffffffff") macs.add(c); }
+    for (const line of text.split("\n")) {
+      const m = /\b([0-9a-f]{1,2}(?::[0-9a-f]{1,2}){5})\b/i.exec(line);
+      if (!m) continue;
+      const c = clean(m[1]);
+      if (c === "000000000000" || c === "ffffffffffff") continue;
+      macs.add(c);
+      const ip = /\b(\d{1,3}(?:\.\d{1,3}){3})\b/.exec(line)?.[1], maker = byPrefix.get(c.slice(0, 6));
+      if (ip && maker !== undefined) this.makerByIp.set(ip, MAKERS[maker].name.replace(/ \(.*$/, ""));
+    }
     return macs;
   }
 }
