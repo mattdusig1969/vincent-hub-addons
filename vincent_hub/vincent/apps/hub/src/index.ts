@@ -45,7 +45,8 @@
  * Serves the built app too, when apps/app/dist exists.
  */
 import "./log.ts";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -870,28 +871,51 @@ h1{font:500 28px Georgia,serif;margin:0 0 10px}p{margin:0;color:#6f675d;font-siz
  * Amazon's sign-in for Echo speakers. Home Assistant shows Amazon's page from its own address; the hub passes it through
  * from the hub's address instead, so it sees the moment the sign-in finishes and can show its own closing page.
  */
-async function amazon(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function amazon(req: IncomingMessage, res: ServerResponse, under = ""): Promise<void> {
   const url = new URL(req.url ?? "/", "http://hub");
+  // A bare path asked for by Amazon's page ("/ax/claim") belongs on Amazon's site: it goes through the same sign-in.
+  if (under) url.pathname = `/auth/alexamedia/proxy/${under}${url.pathname}`;
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
-  const headers: Record<string, string> = {};
-  for (const [k, v] of Object.entries(req.headers)) if (v !== undefined && !["host", "connection", "content-length", "accept-encoding"].includes(k)) headers[k] = Array.isArray(v) ? v.join(", ") : v;
-  const r = await fetch((await haAddress()) + url.pathname + url.search, { method: req.method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined, redirect: "manual", signal: AbortSignal.timeout(150_000) });
+  const sent = Buffer.concat(chunks);
+  // Passed on as it came, the hub's own address included: Home Assistant works out which Amazon page is meant by
+  // comparing the address asked for with the hub address it was given at the start. (fetch would rewrite that address.)
+  const headers: Record<string, string | string[]> = {};
+  for (const [k, v] of Object.entries(req.headers)) if (v !== undefined && !["connection", "content-length", "accept-encoding", "transfer-encoding"].includes(k)) headers[k] = v;
+  if (sent.length) headers["content-length"] = String(sent.length);
+  const to = new URL((await haAddress()) + url.pathname + url.search);
+  const r = await new Promise<{ status: number; headers: IncomingMessage["headers"]; body: Buffer }>((ok, fail) => {
+    const out = (to.protocol === "https:" ? httpsRequest : httpRequest)(to, { method: req.method, headers, timeout: 150_000 }, (back) => {
+      const got: Buffer[] = [];
+      back.on("data", (c: Buffer) => got.push(c));
+      back.on("end", () => ok({ status: back.statusCode ?? 502, headers: back.headers, body: Buffer.concat(got) }));
+      back.on("error", fail);
+    });
+    out.on("timeout", () => out.destroy(new Error("Amazon's page took too long to answer.")));
+    out.on("error", fail);
+    out.end(sent.length ? sent : undefined);
+  });
   const done = url.pathname === "/auth/alexamedia/callback" && r.status === 200;
-  const out = done ? Buffer.from(SIGNED_IN) : Buffer.from(await r.arrayBuffer());
-  for (const [k, v] of r.headers) if (!["content-encoding", "content-length", "transfer-encoding", "connection", "set-cookie"].includes(k)) res.setHeader(k, v);
-  const cookies = r.headers.getSetCookie?.() ?? [];
+  for (const [k, v] of Object.entries(r.headers)) if (v !== undefined && !["content-length", "transfer-encoding", "connection", "set-cookie"].includes(k)) res.setHeader(k, v);
+  const cookies = [...(r.headers["set-cookie"] ?? [])];
+  // Remember, for this browser only and only for a while, which sign-in it is in the middle of.
+  const visit = /^\/auth\/alexamedia\/proxy\/([A-Za-z0-9]+)/.exec(url.pathname)?.[1];
+  if (done) cookies.push("vincent_amazon=; Path=/; Max-Age=0");
+  else if (visit) cookies.push(`vincent_amazon=${visit}; Path=/; Max-Age=1200; HttpOnly; SameSite=Lax`);
   if (cookies.length) res.setHeader("set-cookie", cookies);
-  if (done) { res.setHeader("content-type", "text/html; charset=utf-8"); const id = url.searchParams.get("flow_id"); if (id) flows.linkDone(id); console.log("[echo] Amazon sign-in finished"); }
+  if (done) { res.removeHeader("content-encoding"); res.setHeader("content-type", "text/html; charset=utf-8"); const id = url.searchParams.get("flow_id"); if (id) flows.linkDone(id); console.log("[echo] Amazon sign-in finished"); }
   res.writeHead(r.status);
-  res.end(out);
+  res.end(done ? Buffer.from(SIGNED_IN) : r.body);
 }
 
 createServer((req, res) => {
   const path = new URL(req.url ?? "/", "http://hub").pathname;
-  // Amazon's page also asks for things by bare paths; anything asked for from inside that page goes the same way.
-  const fromAmazon = !path.startsWith("/api/") && String(req.headers.referer ?? "").includes("/auth/alexamedia/");
-  const run = path.startsWith("/auth/alexamedia/") || fromAmazon ? amazon(req, res) : path.startsWith("/api/") ? api(req, res, path) : page(res, path);
+  // Amazon's page also asks for things by bare paths. While a browser is in the middle of that sign-in, anything it asks
+  // for that is not Vincent's own goes to Amazon the same way.
+  const visit = /(?:^|;\s*)vincent_amazon=([A-Za-z0-9]+)/.exec(String(req.headers.cookie ?? ""))?.[1]
+    ?? /\/auth\/alexamedia\/proxy\/([A-Za-z0-9]+)/.exec(String(req.headers.referer ?? ""))?.[1];
+  const own = path === "/" || path.startsWith("/api/") || (!!extname(path) && existsSync(normalize(join(dist, path))));
+  const run = path.startsWith("/auth/alexamedia/") ? amazon(req, res) : visit && !own ? amazon(req, res, visit) : path.startsWith("/api/") ? api(req, res, path) : page(res, path);
   run.catch((e: Error) => {
     console.log(`[api] ${req.method} ${path} failed: ${e.message}`);
     if (!res.headersSent) json(res, 400, { error: e.message });
