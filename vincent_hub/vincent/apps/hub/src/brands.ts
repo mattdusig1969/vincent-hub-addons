@@ -74,7 +74,7 @@ export const BRANDS: Entry[] = [
   B("heos", "HEOS", "media", "steps", "heos", "Enter the address of any one HEOS speaker."),
   B("bluesound", "Bluesound", "media", "steps", "bluesound", "Enter the player's address."),
   // Climate
-  M(B("nest_thermostat", "Google Nest thermostat", "climate", "matter", undefined, "Newer Nest thermostats can be added with a code from the Google Home app.", "matter"),
+  M(B("nest_thermostat", "Google Nest thermostat", "climate", "matter", undefined, "Only two Nest thermostats can be added today: the Nest Thermostat (2020, the mirrored one) and the Nest Learning Thermostat 4th generation. The 3rd generation and earlier, and the Nest Thermostat E, have no code to give and cannot be added yet. If Google Home shows no Linked Matter apps & services for yours, it is one of those.", "matter"),
     "For the Nest Thermostat (2020) and the Nest Learning Thermostat 4th generation. Older Nest thermostats cannot be added yet.",
     FROM_GOOGLE),
   B("nest", "Google Nest cameras and doorbells", "security", "link", "nest", "Nest cameras and doorbells need an account link on Google's website."),
