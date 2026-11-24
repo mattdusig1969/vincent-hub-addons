@@ -33,7 +33,8 @@ const BY_NAME: [RegExp, string, string[]][] = [
 ];
 /** Connections made once per device, so having one says nothing about the maker's other devices. */
 const PER_DEVICE = new Set(["generic", "homekit_controller", "onvif"]);
-const KEEP_MS = 3 * 60_000;
+/** One look serves for half an hour: knocking on every address is not something to do often (some routers take a burst of it for an attack). */
+const KEEP_MS = 30 * 60_000;
 const clean = (mac: string) => mac.split(/[:-]/).map((x) => x.padStart(2, "0")).join("").toLowerCase();
 
 export class Network {
@@ -60,7 +61,7 @@ export class Network {
   async seen(): Promise<Seen[]> {
     if (Date.now() - this.at > KEEP_MS) {
       const look = this.look().catch(() => undefined);
-      if (!this.at) await Promise.race([look, new Promise((r) => setTimeout(r, 4000))]);
+      if (!this.at) await Promise.race([look, new Promise((r) => setTimeout(r, 12_000))]);
     }
     return this.last;
   }
@@ -123,10 +124,12 @@ export class Network {
     if (targets.length) {
       const sock = createSocket("udp4");
       sock.on("error", () => undefined);
-      for (let pass = 0; pass < 2; pass++) {
-        for (const t of targets) sock.send("", 9, t, () => undefined);
-        await new Promise((r) => setTimeout(r, 1200));
+      // Slowly, a few addresses at a time, and once.
+      for (let i = 0; i < targets.length; i += 8) {
+        for (const t of targets.slice(i, i + 8)) sock.send("", 9, t, () => undefined);
+        await new Promise((r) => setTimeout(r, 250));
       }
+      await new Promise((r) => setTimeout(r, 1500));
       sock.close();
     }
     const macs = new Set<string>();
