@@ -32,6 +32,14 @@ const WHY: Record<string, string> = {
 };
 
 /** These always get our word, whatever the maker calls them: nobody at home says "host". */
+/** Where a maker's own wording leaves people guessing, ours: by driver, then by the field's name. */
+const PLAINER: Record<string, Record<string, { label: string; help: string }>> = {
+  alexa_devices: {
+    username: { label: "Amazon email", help: "The email you sign in to Amazon with." },
+    password: { label: "Amazon password", help: "Sent encrypted, straight to Amazon." },
+    code: { label: "Six-digit code from your authenticator app", help: "Open your authenticator app (Google Authenticator, Microsoft Authenticator, 1Password or similar), find Amazon, and type the six digits it shows right now. Nothing is texted to you: Amazon only allows an authenticator app for this. No Amazon entry in an authenticator app yet? On amazon.com go to Account, Login and security, Two-step verification, and add an authenticator app first." },
+  },
+};
 const OURS: Record<string, string> = { host: "Address", ip_address: "Address", address: "Address", device_input: "Name or address" };
 
 const plain = (s: string, vars: Record<string, unknown> = {}) =>
@@ -162,7 +170,8 @@ export class Flows {
       case "form": {
         // Optional questions the app has no way to draw (lists of several answers) are left out; the maker's default stands.
         const fields = ((r.data_schema ?? []) as any[]).filter((e) => e.required || !(e.type === "multi_select" || e.selector?.select?.multiple || e.selector?.select?.custom_value))
-          .map((e): StepField => field(e, say(`step.${r.step_id}.data.${e.name}`), say(`step.${r.step_id}.data_description.${e.name}`)));
+          .map((e): StepField => field(e, say(`step.${r.step_id}.data.${e.name}`), say(`step.${r.step_id}.data_description.${e.name}`)))
+          .map((f): StepField => ({ ...f, ...(PLAINER[String(r.handler)]?.[f.name] ?? {}) }));
         const errors = Object.fromEntries(Object.entries((r.errors ?? {}) as Record<string, string>).map(([k, v]) => [k, plain(WHY[v] ?? say(`error.${v}`) ?? titled(String(v)))]));
         this.open.set(id!, { domain, rooms, fields, menu: false, tips, name });
         const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
