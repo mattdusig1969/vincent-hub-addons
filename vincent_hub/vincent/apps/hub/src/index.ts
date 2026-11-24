@@ -145,6 +145,8 @@ const changed = () => {
   if (pending) return;
   pending = setTimeout(() => { pending = undefined; for (const s of streams) s.write("event: changed\ndata: 1\n\n"); }, 150);
 };
+/** Somebody's starred music changed (or whose device it is): every open app checks its own list at once. */
+const starsChanged = () => { for (const s of streams) s.write("event: stars\ndata: 1\n\n"); };
 // Every home starts with three lists. Made once, after setup, when the hub is reachable.
 const STARTER_LISTS = ["Shopping", "To Do", "Recipes"];
 let seeding = false;
@@ -288,6 +290,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (m === "POST" && path === "/api/phones/me") {
     const b = await body(req);
     store.nameDevice(key, String(b.name ?? ""), String(b.person ?? ""));
+    starsChanged();
     const now = store.device(key)!;
     changes.add(now.person ? `${now.person}, on ${now.name}` : now.name, me.name !== now.name ? `Renamed this device from ${me.name}` : "Said who uses this device");
     changed();
@@ -399,6 +402,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       const list = (Array.isArray(b.stars) ? b.stars : []).filter((x: any) => x && typeof x.kind === "string" && typeof x.id === "string" && typeof x.title === "string")
         .map((x: any) => ({ kind: x.kind, id: String(x.id).slice(0, 300), title: String(x.title).slice(0, 200), ...(typeof x.subtitle === "string" ? { subtitle: x.subtitle.slice(0, 200) } : {}), ...(typeof x.art === "string" ? { art: x.art.slice(0, 500) } : {}), ...(x.opens ? { opens: true } : {}), ...(x.plays === false ? { plays: false } : {}) }));
       store.setStars(key, list);
+      starsChanged();
       return json(res, 200, { ok: true });
     }
     return json(res, 200, { stars: store.starsOf(key) ?? null, person: store.device(key)?.person ?? "" });
