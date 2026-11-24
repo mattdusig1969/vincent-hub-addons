@@ -51,6 +51,10 @@ interface Snapshot {
   flows: Map<string, { flowId: string; handler: string }>;
 }
 
+/** What an Echo was last asked to play, and the song it was reporting just before: see the media control below. */
+const asked = new Map<string, { title: string; from: string; was: string; at: number }>();
+export function askedToPlay(entityId: string, title: string, from: string, was: string): void { asked.set(entityId, { title, from, was, at: Date.now() }); }
+
 export class Devices {
   private snap?: Snapshot;
   private at = 0;
@@ -396,6 +400,11 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
       const sonos = integration === "sonos";
       // A Sonos lists its favourites as inputs too; those are shown as favourites, so only the real inputs stay here.
       const inputs = (Array.isArray(a.source_list) ? (a.source_list as string[]) : []).filter((x) => !sonos || /^(tv|line-in)$/i.test(x));
+      // An Echo asked for something new sometimes keeps reporting the song it played before. Until its report changes,
+      // what was asked for is shown, rather than a song that is no longer playing.
+      const ask = s ? asked.get(s.entity_id) : undefined;
+      const stale = !!ask && st === "playing" && Date.now() - ask.at < 30 * 60_000 && String(a.media_title ?? "") === ask.was;
+      if (ask && !stale && (Date.now() - ask.at > 15_000 || String(a.media_title ?? "") !== ask.was)) asked.delete(s!.entity_id);
       return {
         ...base, kind: "media", state: st, title: a.media_title, artist: a.media_artist, album: a.media_album_name,
         volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined,
@@ -403,6 +412,7 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
         source: typeof a.source === "string" ? a.source : undefined, inputs, library: sonos ? "sonos" : "none",
         group: (Array.isArray(a.group_members) && a.group_members.length ? (a.group_members as string[]).map((e) => byEntity.get(e)).filter((x): x is string => !!x) : [id]),
         groups: sonos,
+        ...(stale ? { title: ask!.title, artist: ask!.from, album: undefined, art: undefined } : {}),
       };
     }
     case "climate": {

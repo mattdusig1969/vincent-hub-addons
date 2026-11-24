@@ -8,6 +8,7 @@
  *
  * Internet radio: the public Radio Browser directory. No account, no key.
  */
+import { askedToPlay } from "./devices.ts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { HA } from "./ha.ts";
@@ -331,6 +332,7 @@ export class Media {
     const play = (type: string, content: string) => this.ha.service("media_player", "play_media", p.entityId, { media_content_type: type, media_content_id: content });
     if (p.integration === ECHO) {
       const title = String(item.title ?? id).slice(0, 120);
+      askedToPlay(p.entityId, title, ({ sxm: "SiriusXM", spotify: "Spotify", radio: "Radio", amazon: "Amazon Music" } as Record<string, string>)[item.kind ?? ""] ?? "", String(this.ha.states.get(p.entityId)?.attributes?.media_title ?? ""));
       switch (item.kind) {
         case "sxm": await play("SIRIUSXM", this.lineup.has(id)?.name ?? title); break;
         case "spotify": await play("SPOTIFY", spotifyAsk(id, title, item.subtitle)); break;

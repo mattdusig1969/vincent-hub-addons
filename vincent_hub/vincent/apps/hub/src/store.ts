@@ -18,6 +18,8 @@ export interface AppleSaved { lists: Record<string, { name: string; /** Shared w
 interface Saved {
   /** Apple Reminders, by the phone or tablet that set it up. */
   apple?: Record<string, AppleSaved>;
+  /** How each host's name is written down when the people of this home say it ("hey vinsen"), learned on any device and used by all of them. */
+  wake?: Record<string, string[]>;
   /** device id -> added | ignored. Absent = found. */
   devices: Record<string, "added" | "ignored">;
   /** Integrations the household said yes to: every device they bring is added. */
@@ -325,6 +327,18 @@ export const store = {
   get allReminders(): Reminder[] { return saved.reminders ?? []; },
   setReminders(all: Reminder[]): void { saved.reminders = all.slice(-600); save(); },
   appleOf(deviceId: string): AppleSaved | undefined { const a = saved.apple?.[deviceId]; return a && { ...a, lists: { ...a.lists }, rows: a.rows.map((r) => ({ ...r })) }; },
+  wakeTaught(): Record<string, string[]> { return Object.fromEntries(Object.entries(saved.wake ?? {}).map(([k, v]) => [k, [...v]])); },
+  /** Adds what a device learned: newest first, twelve ways a host at most (room for several people). True when anything was new. */
+  addWake(add: Record<string, string[]>): boolean {
+    const all = { ...saved.wake }; let changed = false;
+    for (const [id, list] of Object.entries(add)) {
+      const had = all[id] ?? [], next = [...new Set([...list, ...had])].slice(0, 12);
+      if (next.length !== had.length || next.some((x, i) => x !== had[i])) { all[id] = next; changed = true; }
+    }
+    if (changed) { saved.wake = all; save(); }
+    return changed;
+  },
+  clearWake(): void { if (saved.wake && Object.keys(saved.wake).length) { saved.wake = {}; save(); } },
   setApple(deviceId: string, a: AppleSaved | null): void { const all = { ...saved.apple }; if (a) all[deviceId] = a; else delete all[deviceId]; saved.apple = all; save(); },
   addReminder(r: { text: string; at: string; repeat: Repeat; for: string; by: string; made?: string }): Reminder {
     const made: Reminder = { id: randomBytes(6).toString("hex"), ...r };

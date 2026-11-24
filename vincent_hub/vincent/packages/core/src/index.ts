@@ -179,7 +179,18 @@ export interface Weather {
   unit: string;
   high?: number;
   low?: number;
-  days: { date: string; condition: string; high: number; low?: number }[];
+  /** Now, where the forecast source says: how it feels, the air's dampness (%), the wind, the sun's strength. */
+  feels?: number; humidity?: number; wind?: number; uv?: number;
+  /** The units the wind and the rain are counted in ("mph", "in"). */
+  windUnit?: string; wetUnit?: string;
+  days: WeatherDay[];
+}
+export interface WeatherDay {
+  date: string; condition: string; high: number; low?: number;
+  /** Chance of rain or snow (%), how much is expected, the wind, the dampness (%), the sun's strength: each only when the source gives it. */
+  rain?: number; wet?: number; wind?: number; humidity?: number; uv?: number;
+  /** Hour by hour, for the days the source reaches (usually today and tomorrow). */
+  hours?: { at: string; condition: string; temperature: number; rain?: number }[];
 }
 
 export interface ListSummary { id: string; name: string; /** How many things are still to do. */ open: number }

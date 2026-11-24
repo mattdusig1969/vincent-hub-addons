@@ -46,6 +46,7 @@ export class Network {
   private makerByIp = new Map<string, string>(); // home address -> maker, for devices that do not say who made them
   /** Who made the device at this address, when its network address tells. A camera added by its stream address has no other name. */
   makerAt(ip: string): string | undefined { return this.makerByIp.get(ip); }
+  private macByIp = new Map<string, string>(); // home address -> network address, to recognise a camera added by its stream address
   private listening = false;
 
   constructor(ha: Ha) { this.ha = ha; }
@@ -82,6 +83,13 @@ export class Network {
       this.ha.call({ type: "config_entries/get" }) as Promise<any[]>,
     ]);
     const known = new Set<string>(devs.flatMap((d) => (d.connections ?? []).filter((c: string[]) => c[0] === "mac").map((c: string[]) => clean(c[1]))));
+    // A camera added by its stream address is known to the home only by where it lives (192.168.1.86), never by its
+    // network address or its maker: the device at that address is already added, and is not offered again.
+    for (const text of [...entries.filter((e) => e.domain === "generic").map((e) => String(e.title ?? "")), ...devs.map((d) => String(d.name_by_user ?? d.name ?? ""))]) {
+      const at = /^\D*(\d{1,3})[._](\d{1,3})[._](\d{1,3})[._](\d{1,3})\D*$/.exec(text.trim());
+      const mac = at ? this.macByIp.get(at.slice(1).join(".")) : undefined;
+      if (mac) known.add(mac);
+    }
     const drivers = new Set<string>(entries.filter((e) => !e.disabled_by).map((e) => String(e.domain)));
     const makers = devs.map((d) => String(d.manufacturer ?? "").toLowerCase());
 
@@ -144,6 +152,7 @@ export class Network {
       if (c === "000000000000" || c === "ffffffffffff") continue;
       macs.add(c);
       const ip = /\b(\d{1,3}(?:\.\d{1,3}){3})\b/.exec(line)?.[1], maker = byPrefix.get(c.slice(0, 6));
+      if (ip) this.macByIp.set(ip, c);
       if (ip && maker !== undefined) this.makerByIp.set(ip, MAKERS[maker].name.replace(/ \(.*$/, ""));
     }
     return macs;

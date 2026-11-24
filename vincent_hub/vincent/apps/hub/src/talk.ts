@@ -34,6 +34,7 @@ const LIVE_MODEL = process.env.VINCENT_TALK_LIVE_MODEL || "gemini-3.8-live";
 const handleOf = (id: string) => { let h = 5381; for (let i = 0; i < id.length; i++) h = ((h * 33) ^ id.charCodeAt(i)) >>> 0; return `c${h.toString(36).slice(0, 5)}`; };
 
 /** Who each host is, for the service that writes their words. The app's own lines (Host.tsx, the tour) set the tone these follow. */
+import { storyFor } from "./stories.ts";
 const MANNER: Record<string, string> = {
   vincent: "Vincent, the butler: dry, courteous, unflappable. Formal British English, understated wit, never flustered, never gushing. Calls nobody 'mate'.",
   roxy: "Roxy, the house manager: warm, polished, quick. Friendly and efficient, a little playful, gets to the point.",
@@ -125,6 +126,9 @@ const TOOLS = [{ functionDeclarations: [
 const ALLOWED: Record<string, string[]> = { light: ["on", "off", "brightness"], switch: ["on", "off"], media: ["pause", "play", "next", "volume"], climate: ["target", "mode"], lock: ["lock"], cover: ["close"] };
 const SAFETY = ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"].map((category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" }));
 
+/** For a second try after a harmless answer was stopped: unkindness is judged a little less strictly (a host telling its own sad story trips the strictest setting); everything else stays as strict. */
+const SAFETY_AGAIN = SAFETY.map((x) => (x.category === "HARM_CATEGORY_HARASSMENT" ? { ...x, threshold: "BLOCK_MEDIUM_AND_ABOVE" } : x));
+
 export class Talk {
   private deps: TalkDeps;
   constructor(deps: TalkDeps) { this.deps = deps; }
@@ -148,12 +152,13 @@ export class Talk {
     const contents: any[] = turns.slice(-16).map((t) => ({ role: t.role === "you" ? "user" : "model", parts: [{ text: String(t.text).slice(0, 1200) }] }));
     const did: string[] = [];
 
-    for (let round = 0; round < 5; round++) {
+    let again = 0;
+    for (let round = 0; round < 7; round++) {
       let r: Response;
       try {
         r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`, {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25_000),
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, tools: TOOLS, safetySettings: SAFETY, generationConfig: { temperature: 0.8, maxOutputTokens: 2000 } }),
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, tools: TOOLS, safetySettings: again ? SAFETY_AGAIN : SAFETY, generationConfig: { temperature: 0.8, maxOutputTokens: 2000 } }),
         });
       } catch (e) {
         // Too slow is not the same as offline: say which.
@@ -167,6 +172,10 @@ export class Talk {
       const calls = parts.filter((p) => p.functionCall);
       if (!calls.length) {
         const text = parts.map((p) => p.text ?? "").join("").trim();
+        if (!text) console.log(`[talk] nothing came back: ${cand?.finishReason ?? "no candidate"}${j.promptFeedback?.blockReason ? `, ${j.promptFeedback.blockReason}` : ""}${(cand?.safetyRatings ?? []).filter((x: any) => x.probability && x.probability !== "NEGLIGIBLE").map((x: any) => `, ${x.category} ${x.probability}`).join("")}`);
+        // The service's safety check is strict (children use this) and stops some harmless answers, such as a host's own
+        // story of a thunderstorm and a cable. Those are asked once more, a little less strictly on unkindness alone.
+        if (!text && again++ < 2) continue;
         // Stopped by the service's own safety check, or nothing came back: a polite way out, never a blank.
         return { text: text || "I would rather not go there. Is there something about the house I can help with?", did };
       }
@@ -186,7 +195,7 @@ export class Talk {
   /** Everything the host is told before a conversation: the rules, who they are, who is asking, and the house. */
   private system(character: string, asker: TalkAsker, now: string, spoken = false): string {
     const who = CHARACTERS.find((c) => c.id === character) ?? CHARACTERS[0];
-    return `${RULES_OF_THE_HOUSE}${spoken ? "\n\nYou are SPEAKING aloud in this conversation, and being spoken to. Keep answers to a sentence or two, said the way your character would say them. THE HOUSE NOW was written when the conversation began: before answering anything about the state of the house later on, call look_at_house for the state this minute." : ""}\n\nYOUR CHARACTER\nYou are ${MANNER[who.id] ?? MANNER.vincent}\n\nWHO YOU ARE TALKING TO\n${asker.person ? `${asker.person}, on ${asker.name}.` : `Someone on ${asker.name}.`} ${asker.room ? `Their device's own room is ${asker.room}: use it when they name no room.` : "Their device has no room of its own."}${asker.deny.length ? ` The home's owner has not allowed this device to control: ${asker.deny.map((d) => RULES.find((r) => r.id === d)?.name.toLowerCase()).filter(Boolean).join(", ")}.` : ""}\n\nTHE HOUSE NOW\n${now}`;
+    return `${RULES_OF_THE_HOUSE}${spoken ? "\n\nYou are SPEAKING aloud in this conversation, and being spoken to. Keep answers to a sentence or two, said the way your character would say them. Speak at a natural, brisk conversational pace, as quickly as a person chatting would: never slowly, never drawn out, no long pauses between words, whatever your character. THE HOUSE NOW was written when the conversation began: before answering anything about the state of the house later on, call look_at_house for the state this minute." : ""}\n\nYOUR CHARACTER\nYou are ${MANNER[who.id] ?? MANNER.vincent}${storyFor(who.id)}\n\nWHO YOU ARE TALKING TO\n${asker.person ? `${asker.person}, on ${asker.name}.` : `Someone on ${asker.name}.`} ${asker.room ? `Their device's own room is ${asker.room}: use it when they name no room.` : "Their device has no room of its own."}${asker.deny.length ? ` The home's owner has not allowed this device to control: ${asker.deny.map((d) => RULES.find((r) => r.id === d)?.name.toLowerCase()).filter(Boolean).join(", ")}.` : ""}\n\nTHE HOUSE NOW\n${now}`;
   }
 
   /**

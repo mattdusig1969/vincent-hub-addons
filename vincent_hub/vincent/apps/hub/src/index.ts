@@ -403,11 +403,22 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return json(res, 200, {
       // A player showing no picture of its own (a radio station) wears the picture of what was started on it.
       devices: (await devices.all()).map((d) => (d.controls.some((c) => c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id)) ? { ...d, controls: d.controls.map((c) => (c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id) ? { ...c, art: media.artFor(c.id) } : c)) } : d)), rooms: store.rooms(), theme: mine.theme ?? store.theme, palette: mine.palette ?? store.palette, style: mine.style ?? store.style, custom: mine.custom ?? store.custom, rotate: mine.rotate ?? store.rotate, character: mine.character ?? store.character, look: { owner: store.isOwner(key), own: Object.keys(mine).length > 0 }, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = mine.voices?.[c.id] ?? store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: await scenesNow(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
-      weather: place.weather(), lists: lists.all(), reminders: store.reminders(me.id), apple: { can: true, ...apple.chosen(me.id) }, place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
+      weather: place.weather(), lists: lists.all(), reminders: store.reminders(me.id), apple: { can: true, ...apple.chosen(me.id) }, wake: store.wakeTaught(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   // A device's own look. The home's look belongs to the owner's device (set in /api/home, with the PIN); every other
   // phone or tablet starts on it, and may change its own without a PIN. What it never changed keeps following the home.
   // A wake word was heard on a phone or tablet. Kept in the hub's log only, to see how well it is working.
+  // What a device learned of how its people say the hosts' names: kept for the whole home, so every phone and tablet hears them the same.
+  if (m === "POST" && path === "/api/wake/taught") {
+    const b = await body(req), add: Record<string, string[]> = {};
+    for (const c of CHARACTERS) {
+      const list = (Array.isArray(b.add?.[c.id]) ? b.add[c.id] : []).map((x: unknown) => String(x).toLowerCase().replace(/[^a-z ]+/g, " ").split(" ").filter(Boolean).join(" ")).filter((x: string) => x.length >= 6 && x.length <= 40 && x.split(" ").length >= 2 && x.split(" ").length <= 4);
+      if (list.length) add[c.id] = list.slice(0, 12);
+    }
+    if (store.addWake(add)) { console.log(`[wake] ${me.name} taught ${Object.values(add).reduce((n, l) => n + l.length, 0)} ways of saying the names`); devices.invalidate(); changed(); }
+    return json(res, 200, { ok: true, wake: store.wakeTaught() });
+  }
+  if (m === "POST" && path === "/api/wake/forget") { store.clearWake(); console.log(`[wake] ${me.name} cleared what the home had learned`); devices.invalidate(); changed(); return json(res, 200, { ok: true }); }
   if (m === "POST" && path === "/api/wake") { const b = await body(req); console.log(`[wake] ${me.name}: "hey ${String(b.who ?? "").slice(0, 20)}"${b.said ? ` then "${String(b.said).slice(0, 80)}"` : ""}`); return json(res, 200, { ok: true }); }
   // Starred music: kept on the hub so a person's phone and tablet show the same list.
   if (path === "/api/stars") {
