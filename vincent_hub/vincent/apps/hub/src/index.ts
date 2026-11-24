@@ -72,7 +72,7 @@ import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.t
 import { store } from "./store.ts";
 import type { Repeat, Scene } from "../../../packages/core/src/index.ts";
 import { dayKey, whenDue, whenWords, everythingOff, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
-import { THEMES, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
+import { THEMES, CUSTOM_THEME, cleanPalette, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
@@ -188,6 +188,7 @@ const UNLOCK_MS = 10 * 60_000;
  * Which devices have settings open, and until when. Kept on disk as well, so an update or a
  * restart of the hub service does not ask for the PIN again; using settings keeps them open.
  */
+const isTheme = (id: string) => id === CUSTOM_THEME || THEMES.some((t) => t.id === id);
 const unlockFile = join(dataDir, "unlocked.json");
 const unlockId = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 24);
 const unlockTimes = new Map<string, number>();
@@ -381,7 +382,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (m === "GET" && path === "/api/devices")
     return json(res, 200, {
       // A player showing no picture of its own (a radio station) wears the picture of what was started on it.
-      devices: (await devices.all()).map((d) => (d.controls.some((c) => c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id)) ? { ...d, controls: d.controls.map((c) => (c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id) ? { ...c, art: media.artFor(c.id) } : c)) } : d)), rooms: store.rooms(), theme: mine.theme ?? store.theme, style: mine.style ?? store.style, custom: mine.custom ?? store.custom, rotate: mine.rotate ?? store.rotate, character: mine.character ?? store.character, look: { owner: store.isOwner(key), own: Object.keys(mine).length > 0 }, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = mine.voices?.[c.id] ?? store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: await scenesNow(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
+      devices: (await devices.all()).map((d) => (d.controls.some((c) => c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id)) ? { ...d, controls: d.controls.map((c) => (c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id) ? { ...c, art: media.artFor(c.id) } : c)) } : d)), rooms: store.rooms(), theme: mine.theme ?? store.theme, palette: mine.palette ?? store.palette, style: mine.style ?? store.style, custom: mine.custom ?? store.custom, rotate: mine.rotate ?? store.rotate, character: mine.character ?? store.character, look: { owner: store.isOwner(key), own: Object.keys(mine).length > 0 }, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = mine.voices?.[c.id] ?? store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: await scenesNow(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
       weather: place.weather(), lists: lists.all(), reminders: store.reminders(me.id), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   // A device's own look. The home's look belongs to the owner's device (set in /api/home, with the PIN); every other
@@ -390,7 +391,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req);
     if (b.reset === true) { store.setLook(key, null); changed(); return json(res, 200, { ok: true }); }
     const look = { ...mine };
-    if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) look.theme = b.theme;
+    if (typeof b.theme === "string" && isTheme(b.theme)) look.theme = b.theme;
+    if (cleanPalette(b.palette)) look.palette = cleanPalette(b.palette);
     if (typeof b.style === "string" && (STYLES.some((t) => t.id === b.style) || b.style === HOME_STYLE.id)) look.style = b.style;
     if (b.custom && typeof b.custom === "object") {
       const base = look.custom ?? store.custom;
@@ -660,6 +662,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (path === "/api/look/home") {
     const b = await body(req);
     if (mine.theme) store.setTheme(mine.theme);
+    if (mine.palette) store.setPalette(mine.palette);
     if (mine.style) store.setStyle(mine.style);
     if (mine.custom) store.setCustom(mine.custom);
     if (mine.character) store.setCharacter(mine.character);
@@ -769,7 +772,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const b = await body(req);
     // Only what actually changes is written down.
     if (typeof b.name === "string" && b.name.trim() && b.name.trim().slice(0, 40) !== store.homeName) say(`Named the home "${b.name.trim().slice(0, 40)}"`);
-    if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme) && b.theme !== store.theme) say(`Changed the colours to ${THEMES.find((t) => t.id === b.theme)!.name}`);
+    if (typeof b.theme === "string" && isTheme(b.theme) && b.theme !== store.theme) say(`Changed the colours to ${THEMES.find((t) => t.id === b.theme)?.name ?? "the home's own"}`);
     if (typeof b.style === "string" && (STYLES.some((t) => t.id === b.style) || b.style === HOME_STYLE.id) && b.style !== store.style) say(`Changed the style to ${STYLES.find((t) => t.id === b.style)?.name ?? "My Home"}`);
     if (typeof b.character === "string" && CHARACTERS.some((c) => c.id === b.character) && b.character !== store.character) say(`Made ${CHARACTERS.find((c) => c.id === b.character)!.name} the host`);
     if (["off", "daily", "hourly"].includes(b.rotate) && b.rotate !== store.rotate) say(b.rotate === "off" ? "Chose one host for always" : `Chose a new host each ${b.rotate === "daily" ? "day" : "hour"}`);
@@ -777,7 +780,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (typeof b.zip === "string" && b.zip.trim() && b.zip.trim() !== (store.place?.zip ?? "")) say("Changed the home's ZIP code");
     if (typeof b.contact === "string" && b.contact.trim() && b.contact.trim() !== store.contact) say("Changed how to reach the owner");
     if (typeof b.name === "string" && b.name.trim()) store.setHomeName(b.name);
-    if (typeof b.theme === "string" && THEMES.some((t) => t.id === b.theme)) store.setTheme(b.theme);
+    if (typeof b.theme === "string" && isTheme(b.theme)) store.setTheme(b.theme);
+    if (cleanPalette(b.palette)) store.setPalette(cleanPalette(b.palette)!);
     if (typeof b.style === "string" && (STYLES.some((t) => t.id === b.style) || b.style === HOME_STYLE.id)) store.setStyle(b.style);
     if (b.custom && typeof b.custom === "object") {
       const font = FONTS.some((f) => f.id === b.custom.font) ? String(b.custom.font) : store.custom.font;

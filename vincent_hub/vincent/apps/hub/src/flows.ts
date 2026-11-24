@@ -36,8 +36,8 @@ const WHY: Record<string, string> = {
 const PLAINER: Record<string, Record<string, { label: string; help: string; required?: boolean }>> = {
   generic: {
     stream_source: { required: true, label: "The camera's stream address", help: "Starts with rtsp:// and is shown in the camera's own app where you switched the stream on. Type it exactly." },
-    username: { label: "Stream username", help: "Shown beside the address in the camera's app. Not your account email." },
-    password: { label: "Stream password", help: "Shown beside the address in the camera's app." },
+    username: { label: "Stream username", help: "Shown beside the address in the camera's app. Not your account email. If the app shows one, type it here." },
+    password: { label: "Stream password", help: "Shown beside the address in the camera's app. If the app shows one, type it here." },
   },
   alexa_devices: {
     username: { label: "Amazon email", help: "The email you sign in to Amazon with." },
@@ -236,6 +236,11 @@ export class Flows {
         return step;
       }
       case "form": {
+        // A camera's stream has already been opened and checked by the hub when this step arrives; "everything looks good" is not a question for the household.
+        if (domain === "generic" && r.step_id === "user_confirm" && id && !r.errors?.base) {
+          const next = await this.ha.restRaw("POST", `/config/config_entries/flow/${id}`, { confirmed_ok: true });
+          if (next.body?.type && !(next.body.type === "form" && next.body.step_id === "user_confirm")) return this.read(next.body, domain, rooms, id, tips, name);
+        }
         // Optional questions the app has no way to draw (lists of several answers) are left out; the maker's default stands.
         // A folded-away group of technical settings ("advanced") is not asked: its suggested answers are sent as they stand.
         const nested: Record<string, Record<string, unknown>> = {};

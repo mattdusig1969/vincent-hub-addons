@@ -205,6 +205,18 @@ export const THEMES = [
   { id: "onyx", name: "Onyx" },
 ] as const;
 
+/** A household's own colours. Everything else on screen (cards, lines, quiet text) is worked out from these four. */
+export interface Palette { ground: string; button: string; accent: string; ink: string }
+export const CUSTOM_THEME = "custom";
+export const DEFAULT_PALETTE: Palette = { ground: "#f4efe6", button: "#2a2520", accent: "#a8823c", ink: "#2a2520" };
+/** A palette as sent by an app, kept only if all four are plain six-digit colours. */
+export function cleanPalette(v: unknown): Palette | undefined {
+  const p = v as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return undefined;
+  const ok = (c: unknown): c is string => typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c);
+  return ok(p.ground) && ok(p.button) && ok(p.accent) && ok(p.ink) ? { ground: p.ground.toLowerCase(), button: p.button.toLowerCase(), accent: p.accent.toLowerCase(), ink: p.ink.toLowerCase() } : undefined;
+}
+
 export interface HubStatus {
   connected: boolean;
   /** Home Assistant's version on the hub. */

@@ -6,10 +6,10 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { ControlRequest, ListStatus, Reminder, Repeat, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
+import type { ControlRequest, ListStatus, Palette, Reminder, Repeat, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
 
 /** The parts of the look one phone or tablet may choose for itself. Anything left out follows the home. */
-export interface DeviceLook { theme?: string; style?: string; custom?: { font: string; shape: string; outfits?: Record<string, string> }; character?: string; rotate?: string; voices?: Record<string, { locale: string; voice: string }> }
+export interface DeviceLook { theme?: string; palette?: Palette; style?: string; custom?: { font: string; shape: string; outfits?: Record<string, string> }; character?: string; rotate?: string; voices?: Record<string, { locale: string; voice: string }> }
 
 interface Saved {
   /** device id -> added | ignored. Absent = found. */
@@ -51,6 +51,8 @@ interface Saved {
   /** For a device that was waiting for a yes: the rooms chosen for whatever it brings. */
   entryRooms?: Record<string, string[]>;
   theme?: string;
+  /** The home's own colours, used when the theme is "custom". */
+  palette?: Palette;
   style?: string;
   custom?: { font: string; shape: string; outfits?: Record<string, string> };
   character?: string;
@@ -279,6 +281,8 @@ export const store = {
   setHomeName(name: string): void { saved.homeName = name.trim().slice(0, 40); save(); },
   get theme(): string { return saved.theme ?? "ivory"; },
   setTheme(theme: string): void { saved.theme = theme; save(); },
+  get palette(): Palette | undefined { return saved.palette; },
+  setPalette(p: Palette): void { saved.palette = p; save(); },
   get style(): string { return saved.style ?? "traditional"; },
   setStyle(style: string): void { saved.style = style; save(); },
   get custom(): { font: string; shape: string; outfits?: Record<string, string> } { return saved.custom ?? { font: "serif", shape: "traditional" }; },
