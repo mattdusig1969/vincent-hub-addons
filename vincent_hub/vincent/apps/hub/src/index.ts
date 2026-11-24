@@ -36,6 +36,7 @@
  *   GET  /api/software               the hub software's version; POST /api/software/update brings the newest
  *   GET  /api/lists/:id              a list's items; POST {op: add|done|reopen|remove|clear, text, item}; POST /api/lists {name} makes one
  *   GET  /api/brands                 brands that can be added by name
+ *   GET  /api/seen                   makers with devices on the network that are not added yet
  *   POST /api/adding {brand, rooms}  start adding one -> a Step; POST /api/adding/:flow/answer|poll|cancel
  *   POST /api/matter {code}          add a device by its Matter code
  *   POST /api/place {items}          several devices at once: add each to its rooms, or leave it out
@@ -65,6 +66,7 @@ import { dir as dataDir } from "./store.ts";
 import { Flows } from "./flows.ts";
 import { Echo, ECHO_DRIVER } from "./echo.ts";
 import { brandList } from "./brands.ts";
+import { Network } from "./network.ts";
 import { erase, erasePreview, report } from "./upkeep.ts";
 import { MatterKeeper } from "./matter.ts";
 import { changes } from "./changes.ts";
@@ -88,6 +90,7 @@ const lists = new Lists(ha);
 const repeatOf = (v: unknown): Repeat => (["day", "weekdays", "week", "month", "year"].includes(String(v)) ? (String(v) as Repeat) : "");
 const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
 const flows = new Flows(ha, devices);
+const network = new Network(ha);
 // Echo speakers need a part the hub fetches once; and Amazon's sign-in page is shown from Home Assistant's own address.
 const echo = new Echo(ha, (method, path, data, timeout) => supervisor(method, path, timeout ?? 60_000, data));
 flows.preparers[ECHO_DRIVER] = echo;
@@ -607,6 +610,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return;
   }
   if (m === "GET" && path === "/api/brands") return json(res, 200, { brands: brandList() });
+  if (m === "GET" && path === "/api/seen") return json(res, 200, { seen: await network.seen().catch(() => []) });
   if (m === "GET" && path === "/api/software") return json(res, 200, await software());
   const photo = /^\/api\/rooms\/([a-f0-9]+)\/photo$/.exec(path);
   if (m === "GET" && photo) {

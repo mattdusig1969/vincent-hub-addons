@@ -238,6 +238,9 @@ export interface SetupRequest {
 }
 
 /** A brand the household can add by name, for devices the hub cannot find by listening. */
+/** A maker with devices on the home network that the home has not added yet. `brands` are the ways to add them. */
+export interface Seen { name: string; brands: string[]; count: number }
+
 export interface Brand {
   id: string;
   name: string;
