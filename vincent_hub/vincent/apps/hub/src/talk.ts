@@ -21,7 +21,7 @@ export interface TalkDeps {
   control: (req: ControlRequest) => Promise<void>;
   runScene: (scene: Scene, allowed: (kind: string) => boolean) => Promise<{ done: number; failed: number }>;
   /** Finds something to play by name for one speaker and starts it: the household's saved things first, then the stations and services it has. */
-  music: (speakerId: string, query: string) => Promise<{ title: string; from: string } | null>;
+  music: (speakerId: string, query: string, from?: string) => Promise<{ title: string; from: string } | { choices: { title: string; from: string; source: string }[] } | null>;
   /** Writes a line in the home's activity log against the device that asked. */
   say: (what: string, kind: string) => void;
 }
@@ -117,6 +117,7 @@ const TOOLS = [{ functionDeclarations: [
     parameters: { type: "OBJECT", properties: {
       query: { type: "STRING", description: "What to play: an artist, song, album, style, station or playlist, in a few words." },
       room: { type: "STRING", description: "The room's name, exactly as in THE HOUSE NOW." },
+      source: { type: "STRING", enum: ["favourites", "siriusxm", "radio", "spotify", "amazon"], description: "Only when the person has said which service they mean, or has just answered your question about it. Otherwise leave it out." },
     }, required: ["query", "room"] } },
   { name: "run_scene", description: "Run one of the home's scenes by its exact name.",
     parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
@@ -249,7 +250,9 @@ export class Talk {
       // A speaker that plays music from a library comes before a television.
       const here = speakers.filter((x) => x.d.rooms.includes(room.id)).sort((a, b) => Number((a.c as any).library === "none") - Number((b.c as any).library === "none"));
       if (!here.length) return { ok: false, error: `There is no speaker in ${room.name}. Rooms with a speaker: ${withSpeakers.join(", ") || "none"}.` };
-      const found = await this.deps.music(here[0].c.id, query);
+      const found = await this.deps.music(here[0].c.id, query, typeof args.source === "string" ? args.source : undefined);
+      // More than one thing goes by that name: nothing was played. The host asks which, then calls again with the source.
+      if (found && "choices" in found) return { ok: false, ask: `Nothing is playing yet. More than one thing is called that: ${found.choices.map((c) => `"${c.title}" on ${c.from} (source: ${c.source})`).join("; ")}. Ask the person, in one short question, which they mean. When they answer, call play_music again with that source.` };
       if (!found) return { ok: false, error: `Nothing called "${query}" could be found to play. Suggest they pick it under Media.` };
       this.deps.say(`Played ${found.title} on ${labelOf(here[0].d, here[0].c)}, by asking the host`, "media");
       const radio = found.from === "internet radio";

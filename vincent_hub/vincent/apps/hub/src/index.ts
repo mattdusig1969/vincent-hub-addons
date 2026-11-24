@@ -440,7 +440,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       house: async () => ({ devices: await devices.all(), rooms: store.rooms(), scenes: await scenesNow(), weather: place.weather(), lists: lists.all(), homeName: store.homeName, timeZone: store.place?.timeZone ?? ha.timeZone ?? "" }),
       control: (r) => devices.control(r),
       runScene: async (scene, allowed) => { const all = await devices.all(), kind = (id: string) => all.flatMap((d) => d.controls).find((c) => c.id === id)?.kind ?? ""; return scenes.run(scene.steps.filter((st) => allowed(kind(st.id)))); },
-      music: (speaker, query) => media.playByName(speaker, query),
+      music: (speaker, query, from) => media.playByName(speaker, query, { from, stars: (store.starsOf(key) ?? []) as any }),
       say,
     };
     const asker = { ...me, room: store.rooms().find((r) => r.id === String(b.room ?? ""))?.name };

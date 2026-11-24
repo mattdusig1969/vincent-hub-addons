@@ -249,44 +249,71 @@ export class Media {
   }
 
   /**
-   * Finds something to play by name for one speaker and starts it. Looked for, in order: what the household saved
-   * (favourites, playlists), the SiriusXM guide, Spotify, then internet radio. null = nothing by that name.
+   * Finds something to play by name for one speaker and starts it.
+   * What the person starred themselves wins outright. Otherwise the household's saved things, the SiriusXM guide and
+   * internet radio are looked through; when more than one of them has something by that name, nothing is played and the
+   * choices are handed back so the host can ask which was meant (`from` then says which). With no clear match: Spotify,
+   * then a loose match, then radio. An Echo with no clear match is simply asked. null = nothing by that name.
    */
-  async playByName(controlId: string, query: string): Promise<{ title: string; from: string } | null> {
+  async playByName(controlId: string, query: string, opts: { from?: string; stars?: MediaItem[] } = {}): Promise<{ title: string; from: string } | { choices: { title: string; from: string; source: string }[] } | null> {
     const words = query.toLowerCase().replace(/\b(some|a|an|the|music|songs?|play|station|channel|radio|playlist|please)\b/g, " ").split(/[^a-z0-9']+/).filter(Boolean);
     if (!words.length) return null;
     /** How well a title answers what was asked: every word present is best, then most words. 0 = not it. */
-    const score = (title: string, more = "") => { const t = `${title} ${more}`.toLowerCase(); const hit = words.filter((w) => t.includes(w)).length; return hit === words.length ? 2 + (title.toLowerCase() === words.join(" ") ? 1 : 0) : hit / words.length >= 0.6 ? 1 : 0; };
+    const plain = (t: string) => t.toLowerCase().replace(/\b(the|a|an)\b/g, " ").split(/[^a-z0-9']+/).filter(Boolean).join(" ");
+    const score = (title: string, more = "") => { const t = `${title} ${more}`.toLowerCase(); const hit = words.filter((w) => t.includes(w)).length; return hit === words.length ? 2 + (plain(title) === words.join(" ") ? 1 : 0) : hit / words.length >= 0.6 ? 1 : 0; };
     const best = <T extends MediaItem>(items: T[]) => items.map((it) => ({ it, s: score(it.title, it.subtitle) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s)[0];
     const start = async (it: MediaItem, from: string) => { await this.play(controlId, it); return { title: it.title, from }; };
+    const echo = (await this.devices.player(controlId)).integration === ECHO;
+    const want = (opts.from ?? "").toLowerCase();
 
-    // An Echo is simply asked: Alexa finds it on the household's own music service.
-    if ((await this.devices.player(controlId)).integration === ECHO) {
+    // What this person starred is what they mean, when one of their stars has that name.
+    if (!want) {
+      const mine = best((opts.stars ?? []).filter((it) => (echo ? ["sxm", "spotify", "radio", "amazon"] : ["favourite", "playlist", "sxm", "spotify", "radio"]).includes(it.kind)));
+      if (mine && mine.s >= 2) { try { return await start(mine.it, "your favourites"); } catch { /* no longer playable here: look further */ } }
+    }
+
+    const src = await this.sources(controlId).catch(() => null);
+    const NAMES: Record<string, string> = { favourites: "the household's favourites", siriusxm: "SiriusXM", radio: "internet radio" };
+    const strong = new Map<string, MediaItem>();
+    const saved = src ? best([...src.favourites.flatMap((g) => g.items), ...src.playlists]) : undefined;
+    if (saved && saved.s >= 2) strong.set("favourites", saved.it);
+    if (src?.siriusxm) {
+      const guide = await this.siriusxm(controlId).catch(() => []);
+      const ch = best([...new Map(guide.flatMap((g) => g.items).map((it) => [it.id, it])).values()]);
+      // A SiriusXM station the household saved is the same station, not a second one.
+      if (ch && ch.s >= 2 && !(saved && saved.s >= 2 && /sirius/i.test(saved.it.subtitle ?? "") && plain(saved.it.title) === plain(ch.it.title))) strong.set("siriusxm", ch.it);
+    }
+    // Radio lists thousands of stations, so only one whose name is exactly what was said counts as a second meaning.
+    const stations = src?.radio ? await radio(query, "").catch(() => []) : [];
+    const exact = stations.find((st) => score(st.title) === 3);
+    if (exact) strong.set("radio", exact);
+
+    if (want) {
+      const it = strong.get(want);
+      if (it) return start(it, NAMES[want]);
+      if (want === "amazon" && echo) return start({ kind: "amazon", id: query, title: query }, "Amazon Music");
+    } else if (strong.size > 1) {
+      return { choices: [...strong].map(([source, it]) => ({ title: it.title, from: NAMES[source], source })) };
+    } else if (strong.size === 1) {
+      const [[source, it]] = [...strong];
+      return start(it, NAMES[source]);
+    }
+
+    // Nothing by exactly that name. An Echo is simply asked: Alexa finds it on the household's own music service.
+    if (echo && want !== "spotify") {
       await this.play(controlId, { kind: "amazon", id: query, title: query, service: "DEFAULT" });
       return { title: query, from: "Alexa" };
     }
-    const src = await this.sources(controlId).catch(() => null);
-    if (src) {
-      const saved = best([...src.favourites.flatMap((g) => g.items), ...src.playlists]);
-      if (saved && saved.s >= 2) return start(saved.it, "the household's favourites");
-      if (src.siriusxm) {
-        const guide = await this.siriusxm(controlId).catch(() => []);
-        const ch = best([...new Map(guide.flatMap((g) => g.items).map((it) => [it.id, it])).values()]);
-        if (ch && ch.s >= 2) return start(ch.it, "SiriusXM");
-      }
-      if (src.spotify) {
-        const groups = await this.spotifySearch(query).catch(() => []);
-        // Something that plays as a whole (a playlist, an album, an artist) before a single song, unless a song is the clear match.
-        const playable = groups.flatMap((g) => g.items.map((it) => ({ it, label: g.label }))).filter((x) => x.it.plays !== false);
-        const pick = playable.find((x) => score(x.it.title, x.it.subtitle) >= 2) ?? playable[0];
-        if (pick) return start(pick.it, "Spotify");
-      }
-      if (saved) return start(saved.it, "the household's favourites");
+    if (src?.spotify) {
+      const groups = await this.spotifySearch(query).catch(() => []);
+      // Something that plays as a whole (a playlist, an album, an artist) before a single song, unless a song is the clear match.
+      const playable = groups.flatMap((g) => g.items.map((it) => ({ it, label: g.label }))).filter((x) => x.it.plays !== false);
+      const pick = playable.find((x) => score(x.it.title, x.it.subtitle) >= 2) ?? playable[0];
+      if (pick) return start(pick.it, "Spotify");
     }
-    if (await this.hasRadio().catch(() => false)) {
-      const stations = [...(await radio(query, "").catch(() => [])), ...(await radio("", words[0]).catch(() => []))];
-      if (stations[0]) return start(stations[0], "internet radio");
-    }
+    if (saved) return start(saved.it, "the household's favourites");
+    if (stations[0]) return start(stations[0], "internet radio");
+    if (src?.radio) { const more = await radio("", words[0]).catch(() => []); if (more[0]) return start(more[0], "internet radio"); }
     return null;
   }
 
