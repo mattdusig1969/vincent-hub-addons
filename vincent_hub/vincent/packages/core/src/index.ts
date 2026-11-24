@@ -256,6 +256,8 @@ export interface Brand {
   fit: "yes" | "some" | "no";
   /** What adding it takes, in a few words: "Requires your Ring username and password". */
   needs: string;
+  /** The one paragraph shown on the brand's page: what works and anything to know before starting. */
+  about?: string;
   /** For "some" and "no": which models do work, or what would. */
   models?: string;
   /** What to check first. Shown before starting, and again if nothing is found. */

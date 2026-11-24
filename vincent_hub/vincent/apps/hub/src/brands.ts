@@ -113,28 +113,29 @@ export const BRANDS: Entry[] = [
 
 /**
  * What the household should expect before they start: what adding takes, and whether their model can be added at all.
- * [needs] or [needs, fit, models]. A brand not listed here is described from how it is added.
+ * [needs], [needs, fit, models] or [needs, fit, models, how]. `how` is anything to know about adding it that `models` has not said.
+ * A brand not listed here is described from how it is added.
  */
-const EXPECT: Record<string, [string, Brand["fit"]?, string?]> = {
+const EXPECT: Record<string, [string, Brand["fit"]?, string?, string?]> = {
   hue: ["Requires a Hue Bridge, and pressing the button on it"],
-  govee: ["Requires LAN Control switched on in the Govee app", "some", "Many Govee Wi-Fi lights work, but not all: only those where the Govee app shows a LAN Control switch. Bluetooth-only lights do not. Newer lights with the Matter badge can be added with their code."],
+  govee: ["Requires LAN Control switched on in the Govee app", "some", "Many Govee Wi-Fi lights work, but not all: only those where the Govee app shows a LAN Control switch. Bluetooth-only lights do not. Newer lights with the Matter badge can be added with their code.", "In the Govee app, open the light, tap the gear and turn on LAN Control, then search. If the switch is missing, unplug the light, plug it back in and wait up to 30 minutes."],
   lifx: ["Nothing to type: the hub searches"],
   kasa: ["Tapo and newer Kasa devices require your TP-Link email and password"],
   wled: ["Usually found by itself. If not, the strip's address from the WLED app"],
-  nanoleaf: ["Requires holding the power button on the panels", "some", "The wall panels: Light Panels, Canvas, Shapes, Elements and Lines. Essentials bulbs and strips use Thread, which this hub does not have. Newer Nanoleaf Wi-Fi lights with the Matter badge are added with their Matter code instead."],
+  nanoleaf: ["Requires holding the power button on the panels", "some", "The wall panels: Light Panels, Canvas, Shapes, Elements and Lines. Essentials bulbs and strips use Thread, which this hub does not have. Newer Nanoleaf Wi-Fi lights with the Matter badge are added with their Matter code instead.", "To add the panels, hold the power button on the controller for 5 to 7 seconds until its lights start flashing, then continue within 30 seconds."],
   yeelight: ["Requires LAN Control switched on in the Yeelight app"],
   lutron: ["Requires pressing the button on the Smart Hub"],
   shelly: ["Usually found by itself. If not, the device's address from the Shelly app"],
   wiz: ["Usually nothing to type: the hub searches"],
   elgato: ["Usually found by itself. If not, the light's address"],
   wemo: ["Nothing to type: the hub searches", "some", "Only Wemo plugs, switches and dimmers that are already on your Wi-Fi. Belkin closed the Wemo app on January 31, 2026, so a new or reset Wemo device can no longer be set up. The Thread models cannot be added."],
-  meross: ["Requires the Matter code printed on the device", "some", "Only Meross models with the Matter badge. Older Meross devices are not compatible; the current Matter versions of the same plugs and switches are."],
-  aqara: ["Requires an Aqara hub and a code from the Aqara app", "some", "Works through an Aqara hub: M3, M200, M100, M2, M1S, E1, or the camera hubs G3, G5 Pro and G410. Sensors and switches on their own are not compatible."],
-  switchbot: ["Requires a code from the SwitchBot app, and usually a SwitchBot hub", "some", "Works through a SwitchBot Hub 2, Hub 3, AI Hub or a Hub Mini marked Matter Enabled. Some newer Wi-Fi products need no hub: the Air Purifier, robot vacuums, Floor Lamp, LED Strip Light 3 and the Lock Pro marked Matter Enabled. The original Hub Mini does not work."],
-  leviton: ["Requires a code from the My Leviton app", "some", "Decora Smart Wi-Fi 2nd generation (models starting D2) and the newer models starting D3. Not every D2 model has Matter yet. First-generation Wi-Fi and HomeKit models are not compatible."],
+  meross: ["Requires the Matter code printed on the device", "some", "Only Meross models with the Matter badge. Older Meross devices are not compatible; the current Matter versions of the same plugs and switches are.", "Do not delete the device from the Meross app afterwards: that resets it."],
+  aqara: ["Requires an Aqara hub and a code from the Aqara app", "some", "Works through an Aqara hub: M3, M200, M100, M2, M1S, E1, or the camera hubs G3, G5 Pro and G410. Sensors and switches on their own are not compatible.", "Update the hub and the Aqara Home app first."],
+  switchbot: ["Requires a code from the SwitchBot app, and usually a SwitchBot hub", "some", "Works through a SwitchBot Hub 2, Hub 3, AI Hub or a Hub Mini marked Matter Enabled. Some newer Wi-Fi products need no hub: the Air Purifier, robot vacuums, Floor Lamp, LED Strip Light 3 and the Lock Pro marked Matter Enabled. The original Hub Mini does not work.", "Each hub passes on a limited number of devices: Hub Mini 4, Hub 2 8, Hub 3 and AI Hub 30."],
+  leviton: ["Requires a code from the My Leviton app", "some", "Decora Smart Wi-Fi 2nd generation (models starting D2) and the newer models starting D3. Not every D2 model has Matter yet. First-generation Wi-Fi and HomeKit models are not compatible.", "Leviton's Matter update removes the device from Apple Home; it has to be added there again with the Matter code."],
   amazon_echo: ["Requires your Amazon username and password"],
   amazon_plug: ["Requires the Matter code from the plug's box", "some", "The Amazon Basics Smart Plug with the Matter badge can be added with the code in its box. The original Amazon Smart Plug has no badge, works only through Alexa and cannot be added."],
-  wyze: ["Works only in the Wyze app", "no", "Wyze gives no way in for other apps."],
+  wyze: ["Works only in the Wyze app", "no", "Wyze devices work only in the Wyze app. Wyze gives no way in for other apps."],
   smartthings: ["Needs an account link with Samsung", "no", "From December 15, 2026 Samsung requires a paid SmartThings plan to link other apps, and Vincent does not offer that link yet. Devices in SmartThings that speak Matter can be added without it: choose Already in SmartThings."],
   sonos: ["Nothing to type: the hub searches"],
   apple_tv: ["Usually found by itself. Requires a code shown on the TV"],
@@ -147,24 +148,24 @@ const EXPECT: Record<string, [string, Brand["fit"]?, string?]> = {
   yamaha: ["Usually found by itself. If not, the receiver's address"],
   heos: ["Usually found by itself. If not, one speaker's address"],
   bluesound: ["Usually found by itself. If not, the player's address"],
-  nest_thermostat: ["Requires a code from the Google Home app", "some", "Only the Nest Thermostat (2020) and the Nest Learning Thermostat 4th generation. The 3rd generation and the Thermostat E are not compatible yet. The 1st and 2nd generation are no longer supported by Google and will not be."],
-  nest: ["Needs an account link on Google's website", "no", "Nest thermostats can be added: the Nest Thermostat (2020) and the Learning Thermostat 4th generation."],
+  nest_thermostat: ["Requires a code from the Google Home app", "some", "Only the Nest Thermostat (2020) and the Nest Learning Thermostat 4th generation. The 3rd generation and the Thermostat E are not compatible yet. The 1st and 2nd generation are no longer supported by Google and will not be.", "If Google Home shows no Linked Matter apps & services for yours, it is one that cannot be added."],
+  nest: ["Needs an account link on Google's website", "no", "Nest cameras and doorbells need an account link on Google's website, which Vincent does not offer yet. Nest thermostats can be added: the Nest Thermostat (2020) and the Learning Thermostat 4th generation."],
   ecobee: ["Requires the HomeKit code from the thermostat's own menu"],
-  honeywell: ["Requires your Total Connect Comfort username and password", "some", "Thermostats you control in the Total Connect Comfort app (US accounts). Thermostats set up in the Resideo app (T5, T6 Pro, T9, T10) do not work this way. The newer X2S is added with its Matter code instead."],
+  honeywell: ["Requires your Total Connect Comfort username and password", "some", "Thermostats you control in the Total Connect Comfort app (US accounts). Thermostats set up in the Resideo app (T5, T6 Pro, T9, T10) do not work this way. The newer X2S is added with its Matter code instead.", "Check first: if you can see your thermostat at mytotalconnectcomfort.com, it will work."],
   sensibo: ["Requires an API key from Sensibo's website"],
   tado: ["Needs an account link on tado's website", "no", "The current tado X range uses Thread, which this hub does not have. Older tado (V3+ and earlier) needs a sign-in on tado's website that Vincent does not offer yet."],
-  ring: ["Requires your Ring email and password, and a sign-in code from Ring", "some", "Doorbells, cameras, chimes and the intercom. Ring Alarm and its sensors are not compatible."],
-  reolink: ["Requires the camera's own username and password", "some", "Plug-in and PoE cameras, video doorbells, recorders and Home Hubs. Battery cameras (Argus, Altas) should be added through a Reolink Home Hub or recorder. Cameras that use a SIM card cannot be added."],
+  ring: ["Requires your Ring email and password, and a sign-in code from Ring", "some", "Doorbells, cameras, chimes and the intercom. Ring Alarm and its sensors are not compatible.", "Ring works through Ring's own service, so it needs the internet."],
+  reolink: ["Requires the camera's own username and password", "some", "Plug-in and PoE cameras, video doorbells, recorders and Home Hubs. Battery cameras (Argus, Altas) should be added through a Reolink Home Hub or recorder. Cameras that use a SIM card cannot be added.", "The hub usually finds the camera by itself. Use the camera's or recorder's own sign-in (not the Reolink app account); it must be an admin user. If it will not connect, switch on HTTP or HTTPS in the camera's network settings in the Reolink app."],
   unifi: ["Requires the console's address, a local user, and an API key made on the console"],
   onvif: ["Requires the camera's address, username and password"],
-  eufy_camera: ["Requires RTSP switched on in the eufy app", "some", "Mostly plug-in cameras (Indoor Cam models, Floodlight Cam E340 and similar). The test is simple: if the eufy app shows a NAS (RTSP) setting for the camera, it can be added. Doorbells and most battery cameras cannot."],
+  eufy_camera: ["Requires RTSP switched on in the eufy app", "some", "Mostly plug-in cameras (Indoor Cam models, Floodlight Cam E340 and similar). The test is simple: if the eufy app shows a NAS (RTSP) setting for the camera, it can be added. Doorbells and most battery cameras cannot.", "First, in the eufy app: tap the camera, then the gear, then Storage, NAS (RTSP Stream). Switch it on and set recording to Continuous. The app then shows an address starting rtsp:// with a username and a password; you type those three here."],
   camera_stream: ["Requires the camera's stream address"],
-  eufy: ["Requires a Matter code from the eufy app", "some", "Only the FamiLock S3 and S3 Max. Other eufy locks are not compatible yet."],
-  blink: ["Requires your Blink username and password, and a code Blink sends you", "some", "Still pictures, motion alerts and arming only. Blink gives other apps no live video."],
+  eufy: ["Requires a Matter code from the eufy app", "some", "Only the FamiLock S3 and S3 Max. Other eufy locks are not compatible yet.", "For eufy cameras, choose eufy cameras from the brand list."],
+  blink: ["Requires your Blink username and password, and a code Blink sends you", "some", "Still pictures, motion alerts and arming only. Blink gives other apps no live video.", "If Blink texts or emails a code, enter it. If Blink instead emails asking you to allow access, approve it and leave the code box empty. Motion is only reported while the system is armed."],
   schlage: ["Requires your Schlage Home email and password", "some", "Schlage Encode, Encode Lever and Encode Plus Wi-Fi locks. The newer Sense Pro and Arrive are untested. Schlage Connect and the old Schlage Sense are not compatible."],
-  yale: ["Needs an account link on Yale's website", "no", "Yale's Matter locks use Thread, which this hub does not have. They can only be added if another maker's Thread device in the home (a Google Nest Hub, Apple TV or HomePod) shares the lock on."],
-  arlo: ["Works only in the Arlo app", "no", "Arlo has no Matter support and no link for hubs like this one. Some Arlo cameras work with Apple Home, Alexa and Google, but not with Vincent."],
-  simplisafe: ["Needs an account link on SimpliSafe's website", "no"],
+  yale: ["Needs an account link on Yale's website", "no", "Yale and August need an account link on their website, which Vincent does not offer yet. Yale's Matter locks use Thread, which this hub does not have; they can only be added if another maker's Thread device in the home (a Google Nest Hub, Apple TV or HomePod) shares the lock on."],
+  arlo: ["Works only in the Arlo app", "no", "Arlo cameras work only in the Arlo app. Arlo has no Matter support and no link for hubs like this one."],
+  simplisafe: ["Needs an account link on SimpliSafe's website", "no", "Keep using the SimpliSafe app for now."],
   from_apple: ["Requires a code from the Apple Home app"],
   from_google: ["Requires a code from the Google Home app"],
   from_alexa: ["Requires a code from the Alexa app"],
@@ -178,7 +179,10 @@ const BY_HOW: Record<Brand["how"], [string, Brand["fit"]]> = {
 };
 
 export const brandList = (): Brand[] => BRANDS.map(({ driver: _driver, ...b }) => {
-  const [needs, fit, models] = EXPECT[b.id] ?? [];
-  return { ...b, needs: needs ?? BY_HOW[b.how][0], fit: fit ?? BY_HOW[b.how][1], ...(models ? { models } : {}) };
+  const [needs, fit, models, how] = EXPECT[b.id] ?? [];
+  const f = fit ?? BY_HOW[b.how][1];
+  // One paragraph for the brand's page: everything that works is told by its tips; anything narrower by which models, then how.
+  const about = f === "yes" || !models ? b.tips : [models, how].filter(Boolean).join(" ");
+  return { ...b, needs: needs ?? BY_HOW[b.how][0], fit: f, about, ...(models ? { models } : {}) };
 });
 export const brand = (id: string): Entry | undefined => BRANDS.find((b) => b.id === id);
