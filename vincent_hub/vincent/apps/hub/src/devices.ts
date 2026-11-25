@@ -41,10 +41,17 @@ const NOT_HOME = new Set(["ipp", "brother", "upnp", "dlna_dmr", "dlna_dms", "syn
 
 const DISCOVERED = new Set(["zeroconf", "ssdp", "dhcp", "homekit", "bluetooth", "usb", "mqtt", "integration_discovery", "hassio"]);
 
+/** What each maker calls the keys of its remote. Only makers listed here get a remote in the app. */
+const REMOTE_WORDS: Record<string, Record<string, string>> = {
+  apple_tv: { up: "up", down: "down", left: "left", right: "right", select: "select", back: "menu", home: "home", playpause: "play_pause", rewind: "skip_backward", forward: "skip_forward", volup: "volume_up", voldown: "volume_down" },
+  androidtv_remote: { up: "DPAD_UP", down: "DPAD_DOWN", left: "DPAD_LEFT", right: "DPAD_RIGHT", select: "DPAD_CENTER", back: "BACK", home: "HOME", playpause: "MEDIA_PLAY_PAUSE", rewind: "MEDIA_REWIND", forward: "MEDIA_FAST_FORWARD", volup: "VOLUME_UP", voldown: "VOLUME_DOWN" },
+  roku: { up: "up", down: "down", left: "left", right: "right", select: "select", back: "back", home: "home", playpause: "play", rewind: "reverse", forward: "forward", volup: "volume_up", voldown: "volume_down" },
+};
+
 interface Snapshot {
   devices: Device[];
   /** control id -> entity id + the device that owns it */
-  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; name?: string; events?: string[]; activity?: string }>;
+  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; name?: string; events?: string[]; activity?: string; remote?: string }>;
   /** entity id -> control id, for naming the other players in a group */
   byEntity: Map<string, string>;
   /** device id -> waiting flow */
@@ -80,7 +87,7 @@ export class Devices {
         const ref = this.snap!.controls.get(c.id)!;
         // A control named after its device follows the household's name for that device.
         const own = ref.name ?? (ref.name = c.name);
-        const now = project(c.id, own === d.makerName ? d.name : own, ref.domain, this.ha.states.get(ref.entityId), ref.integration, this.snap!.byEntity);
+        const now = project(c.id, own === d.makerName ? d.name : own, ref.domain, this.ha.states.get(ref.entityId), ref.integration, this.snap!.byEntity, !!ref.remote);
         if (now.kind === "camera") now.event = this.lastEvent(ref);
         return now;
       });
@@ -127,10 +134,12 @@ export class Devices {
         const host = typeof d.configuration_url === "string" ? /\/\/([^:/]+)/.exec(d.configuration_url)?.[1] : undefined;
         // A camera's "someone rang" and "something moved" live in entities beside it.
         const beside = domain === "camera" ? ents.filter((x: any) => x.device_id === d.id && !x.disabled_by).map((x: any) => String(x.entity_id)) : [];
-        snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host,
+        // A TV box's remote is an entity of its own beside the player; its keys are sent there.
+        const remote = domain === "media_player" && REMOTE_WORDS[integration] ? ents.find((x: any) => x.device_id === d.id && !x.disabled_by && String(x.entity_id).startsWith("remote."))?.entity_id as string | undefined : undefined;
+        snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host, ...(remote ? { remote } : {}),
           ...(beside.length ? { events: beside.filter((x: string) => /^event\..*_(ding|motion)$/.test(x)), activity: beside.find((x: string) => /^sensor\..*_last_activity$/.test(x)) } : {}) });
         snap.byEntity.set(e.entity_id, e.id);
-        controls.push(project(e.id, name, domain, undefined, integration, snap.byEntity));
+        controls.push(project(e.id, name, domain, undefined, integration, snap.byEntity, !!remote));
       }
       if (!controls.length) continue; // nothing the app could do with it
       const entryIds = d.config_entries as string[];
@@ -304,8 +313,14 @@ export class Devices {
       }
       case "lock": case "unlock": {
         await call(req.action);
-        // Many locks answer through their maker's service and are only read every half minute: asked again a few times, the app sees the lock move sooner.
-        for (const ms of [3000, 8000, 16000]) setTimeout(() => { this.ha.service("homeassistant", "update_entity", entityId).catch(() => {}); }, ms);
+        // Many locks answer through their maker's service and are only read every half minute: and the lock itself can take up to a minute to act. Asked again every ten seconds or so for a while, the app sees it move soon after it does.
+        for (const ms of [3000, 8000, 16000, 25000, 35000, 45000, 55000, 70000, 85000, 100000]) setTimeout(() => { this.ha.service("homeassistant", "update_entity", entityId).catch(() => {}); }, ms);
+        break;
+      }
+      case "key": {
+        const word = REMOTE_WORDS[ref.integration]?.[String(req.key ?? "")];
+        if (!ref.remote || !word) throw new Error("unknown action");
+        await this.ha.service("remote", "send_command", ref.remote, { command: word });
         break;
       }
       case "open": await call("open_cover"); break;
@@ -381,7 +396,7 @@ export class Devices {
   }
 }
 
-function project(id: string, name: string, domain: string, s: HaState | undefined, integration: string, byEntity: Map<string, string>): Control {
+function project(id: string, name: string, domain: string, s: HaState | undefined, integration: string, byEntity: Map<string, string>, remote = false): Control {
   const a = s?.attributes ?? {};
   const base = { id, name, available: !!s && s.state !== "unavailable" && s.state !== "unknown", changed: s?.last_changed };
   switch (KIND[domain].kind) {
@@ -416,6 +431,7 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
         source: typeof a.source === "string" ? a.source : undefined, inputs, library: sonos ? "sonos" : "none",
         group: (Array.isArray(a.group_members) && a.group_members.length ? (a.group_members as string[]).map((e) => byEntity.get(e)).filter((x): x is string => !!x) : [id]),
         groups: sonos,
+        ...(remote ? { remote: true } : {}), ...(typeof a.app_name === "string" && a.app_name ? { app: a.app_name } : {}),
         ...(stale ? { title: ask!.title, artist: ask!.from, album: undefined, art: undefined } : {}),
       };
     }

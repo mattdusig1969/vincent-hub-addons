@@ -76,6 +76,10 @@ export type Control =
       kind: "media"; state: "playing" | "paused" | "idle" | "off"; title?: string; artist?: string; album?: string; volume?: number;
       /** Address of the cover art on the hub; changes when the art does. */
       art?: string;
+      /** True for a TV or TV box that takes the keys of a remote (arrows, select, back, home). */
+      remote?: boolean;
+      /** The app on screen, when a TV box says ("YouTube TV"). */
+      app?: string;
       /** The input in use ("TV", "Line-in") and the ones it can switch to. */
       source?: string; inputs: string[];
       /** The players playing together with this one, itself included, the leader first (control ids). One entry = playing alone. */
@@ -113,7 +117,12 @@ export type Action =
   | "play" | "pause" | "volume" | "next" | "previous"
   | "target" | "low" | "high" | "mode"
   | "lock" | "unlock"
-  | "open" | "close";
+  | "open" | "close"
+  | "key";
+
+/** The keys of a TV remote, in our own words. The hub turns each into what the TV's maker calls it. */
+export const REMOTE_KEYS = ["up", "down", "left", "right", "select", "back", "home", "playpause", "rewind", "forward", "volup", "voldown"] as const;
+export type RemoteKey = (typeof REMOTE_KEYS)[number];
 
 /** A thermostat's modes in plain words, in the order they are offered. */
 export const CLIMATE_MODES: { id: string; name: string }[] = [
@@ -123,6 +132,8 @@ export const CLIMATE_MODES: { id: string; name: string }[] = [
 
 export interface ControlRequest {
   id: string; action: Action; value?: number;
+  /** For "key": which key of the remote was pressed. */
+  key?: string;
   /** For a thermostat's "mode": the mode to switch to. */
   mode?: string;
   /** For a light: the colour (0xRRGGBB) or the white (kelvin) to show. With "color" / "white", or along with "brightness". */

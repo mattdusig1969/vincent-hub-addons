@@ -545,7 +545,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const no = at ? barred(at.c.kind) : "";
     if (no) return json(res, 403, { code: "rule", error: no });
     await devices.control(b);
-    if (at) say(controlWords(at.c.name === at.d.name || at.d.controls.length === 1 ? at.d.name : `${at.d.name} ${at.c.name}`, at.c.kind, String(b.action), b.value, CLIMATE_MODES.find((x) => x.id === b.mode)?.name ?? b.mode), ruleFor(at.c.kind) ?? "settings");
+    // A press on the remote is not written down: a film takes a hundred of them.
+    if (at && b.action !== "key") say(controlWords(at.c.name === at.d.name || at.d.controls.length === 1 ? at.d.name : `${at.d.name} ${at.c.name}`, at.c.kind, String(b.action), b.value, CLIMATE_MODES.find((x) => x.id === b.mode)?.name ?? b.mode), ruleFor(at.c.kind) ?? "settings");
     return json(res, 200, { ok: true });
   }
   const med = /^\/api\/media\/([^/]+)\/(sources|play|siriusxm|group)$/.exec(path);
