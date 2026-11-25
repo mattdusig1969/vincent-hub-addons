@@ -206,8 +206,11 @@ export class Flows {
       case "abort": {
         const reason = String(r.reason ?? "unknown");
         const why = plain(WHY[reason] ?? say(`abort.${reason}`) ?? titled(reason), r.description_placeholders);
+        // An Apple Home code only works on a device that is in nobody's Apple Home: say so plainly, and what to do.
+        if (domain === "homekit_controller" && reason === "no_devices") return end(stopped("The hub could not find this device waiting to be paired. First check that it is plugged in and has had a minute to get back on your Wi-Fi: a device unplugged to read its code cannot be found. If it is on, it is most likely already in Apple Home, and a device with an Apple Home code can only be in one place at a time: open the Home app on an iPhone, remove the device there (it stays in its maker's own app), then scan its code here again."));
+        const sentence = /[.!?]$/.test(why) ? why : `${why}.`;
         // Nothing found, or nothing answered: say what to check, not just that it failed.
-        return end(stopped(tips && /no_dev|cannot_connect|timeout/.test(reason) ? `${why} ${tips}` : why));
+        return end(stopped(tips && /no_dev|cannot_connect|timeout/.test(reason) ? `${sentence} ${tips}` : why));
       }
       case "external": case "external_done":
         if (r.type === "external" && r.url && domain === "alexa_media" && id) {

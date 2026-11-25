@@ -302,8 +302,12 @@ export class Devices {
         await call("set_hvac_mode", { hvac_mode: theirs });
         break;
       }
-      case "lock": await call("lock"); break;
-      case "unlock": await call("unlock"); break;
+      case "lock": case "unlock": {
+        await call(req.action);
+        // Many locks answer through their maker's service and are only read every half minute: asked again a few times, the app sees the lock move sooner.
+        for (const ms of [3000, 8000, 16000]) setTimeout(() => { this.ha.service("homeassistant", "update_entity", entityId).catch(() => {}); }, ms);
+        break;
+      }
       case "open": await call("open_cover"); break;
       case "close": await call("close_cover"); break;
       default: throw new Error("unknown action");
@@ -425,7 +429,7 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
       };
     }
     case "lock": return { ...base, kind: "lock", locked: s?.state === "locked" };
-    case "cover": return { ...base, kind: "cover", open: s?.state !== "closed" };
+    case "cover": return { ...base, kind: "cover", open: s?.state !== "closed", door: ["garage", "door", "gate"].includes(String(a.device_class ?? "")) };
     // Feature 2 = it can stream. A sleeping battery camera says "idle", never "unavailable".
     case "camera": return { ...base, kind: "camera", still: `/api/cameras/${id}/still`, live: (Number(a.supported_features ?? 0) & 2) === 2 };
     default: return { ...base, kind: "switch", on: s?.state === "on" };

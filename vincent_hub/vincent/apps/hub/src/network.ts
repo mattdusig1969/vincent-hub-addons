@@ -67,6 +67,8 @@ export class Network {
       const look = this.look().catch(() => undefined);
       if (!this.at) await Promise.race([look, new Promise((r) => setTimeout(r, 12_000))]);
     }
+    // What the home has added is read afresh each time: something added a minute ago must not still be offered.
+    if (this.macs) await this.judge(this.macs, true).catch(() => undefined);
     return this.last;
   }
 
@@ -74,10 +76,19 @@ export class Network {
     return (this.running ??= this.sweep().finally(() => { this.running = undefined; }));
   }
 
+  /** The network addresses that answered at the last look. */
+  private macs?: Set<string>;
   private async sweep(): Promise<void> {
     await this.listen();
     const macs = await this.answering();
     for (const m of this.names.keys()) macs.add(m);
+    this.macs = macs;
+    await this.judge(macs, false);
+    this.at = Date.now();
+  }
+
+  /** Which of the makers seen are not in the home yet. */
+  private async judge(macs: Set<string>, quiet: boolean): Promise<void> {
     const [devs, entries] = await Promise.all([
       this.ha.call({ type: "config/device_registry/list" }) as Promise<any[]>,
       this.ha.call({ type: "config_entries/get" }) as Promise<any[]>,
@@ -117,7 +128,7 @@ export class Network {
       out.push({ name, brands: open, count: f.count });
     }
     this.last = out.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-    this.at = Date.now();
+    if (quiet) return;
     console.log(`[network] ${macs.size} devices answered; not yet added: ${this.last.map((s) => `${s.count} ${s.name}`).join(", ") || "none"}`);
   }
 

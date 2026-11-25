@@ -97,7 +97,7 @@ export type Control =
       doing?: string;
     })
   | (ControlBase & { kind: "lock"; locked: boolean })
-  | (ControlBase & { kind: "cover"; open: boolean })
+  | (ControlBase & { kind: "cover"; open: boolean; /** A way into the house (a garage door, a door, a gate), as against a shade or a blind. */ door?: boolean })
   | (ControlBase & {
       kind: "camera";
       /** Address of its newest picture on the hub ("" = none to show). */
