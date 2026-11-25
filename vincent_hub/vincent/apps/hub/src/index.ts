@@ -403,7 +403,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return json(res, 200, {
       // A player showing no picture of its own (a radio station) wears the picture of what was started on it.
       devices: (await devices.all()).map((d) => (d.controls.some((c) => c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id)) ? { ...d, controls: d.controls.map((c) => (c.kind === "media" && !c.art && c.state === "playing" && media.artFor(c.id) ? { ...c, art: media.artFor(c.id) } : c)) } : d)), rooms: store.rooms(), theme: mine.theme ?? store.theme, palette: mine.palette ?? store.palette, style: mine.style ?? store.style, custom: mine.custom ?? store.custom, rotate: mine.rotate ?? store.rotate, character: mine.character ?? store.character, look: { owner: store.isOwner(key), own: Object.keys(mine).length > 0 }, voices: Object.fromEntries(CHARACTERS.map((c) => { const v = mine.voices?.[c.id] ?? store.voices[c.id]; return [c.id, v && c.voices.some((x) => x.id === v.voice) ? v : defaultVoice(c.id)]; })), unlocked: isUnlocked(key), scenes: await scenesNow(), scenesRefused: store.scenesRefused, colors: store.colors, sun: sunTimes(),
-      weather: place.weather(), lists: lists.all(), reminders: store.reminders(me.id), apple: { can: true, ...apple.chosen(me.id) }, wake: store.wakeTaught(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
+      weather: place.weather(), lists: lists.all(), timers: store.timers(me.id), reminders: store.reminders(me.id), apple: { can: true, ...apple.chosen(me.id) }, wake: store.wakeTaught(), place: { zip: store.place?.zip ?? "", place: store.place?.place ?? "", timeZone: store.place?.timeZone ?? "", contact: isUnlocked(key) ? store.contact : "" },
     });
   // A device's own look. The home's look belongs to the owner's device (set in /api/home, with the PIN); every other
   // phone or tablet starts on it, and may change its own without a PIN. What it never changed keeps following the home.
@@ -461,10 +461,14 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (m === "POST" && (path === "/api/talk" || path === "/api/talk/live" || path === "/api/talk/act")) {
     const b = await body(req);
     const deps: TalkDeps = {
-      house: async () => ({ devices: await devices.all(), rooms: store.rooms(), scenes: await scenesNow(), weather: place.weather(), lists: lists.all(), homeName: store.homeName, timeZone: store.place?.timeZone ?? ha.timeZone ?? "" }),
+      house: async () => ({ devices: await devices.all(), rooms: store.rooms(), scenes: await scenesNow(), weather: place.weather(), lists: lists.all(), timers: store.timers(me.id), homeName: store.homeName, timeZone: store.place?.timeZone ?? ha.timeZone ?? "" }),
       control: (r) => devices.control(r),
       runScene: async (scene, allowed) => { const all = await devices.all(), kind = (id: string) => all.flatMap((d) => d.controls).find((c) => c.id === id)?.kind ?? ""; return scenes.run(scene.steps.filter((st) => allowed(kind(st.id)))); },
       music: (speaker, query, from) => media.playByName(speaker, query, { from, stars: (store.starsOf(key) ?? []) as any }),
+      setTimer: (seconds, name) => store.addTimer({ seconds, name, by: me.person || me.name, made: me.id }),
+      stopTimer: (id) => { store.removeTimer(id); },
+      remind: (text, at, repeat) => { store.addReminder({ text, at: at.toISOString(), repeat: repeatOf(repeat), for: "", by: me.person || me.name, made: me.id }); say(`Set the reminder "${text.slice(0, 60)}" by asking the host`); },
+      listAdd: (id, text) => lists.change(id, { op: "add", text }),
       say,
     };
     const asker = { ...me, room: store.rooms().find((r) => r.id === String(b.room ?? ""))?.name };
@@ -555,6 +559,16 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (med && m === "GET" && med[2] === "siriusxm") return json(res, 200, { groups: await media.siriusxm(med[1]) });
   if (med && m === "GET" && med[2] === "sources") return json(res, 200, await media.sources(med[1]));
   if (med && m === "POST" && med[2] === "play") { const b = await body(req); await media.play(med[1], b); const at = await controlOf(med[1]); say(`Played ${String(b.title ?? "something").slice(0, 60)} on ${at?.d.name ?? "a speaker"}`, "media"); return json(res, 200, { ok: true }); }
+  // Timers: set by asking the host, or here; stopped from any screen.
+  if (m === "POST" && path === "/api/timers") {
+    const b = await body(req);
+    if (b.op === "stop") { store.removeTimer(String(b.id ?? "")); changed(); return json(res, 200, { ok: true }); }
+    const seconds = Math.round(Number(b.seconds));
+    if (!(seconds >= 1 && seconds <= 24 * 3600)) return json(res, 400, { error: "A timer needs a length, up to a day." });
+    const t = store.addTimer({ seconds, name: String(b.name ?? "").trim().slice(0, 30), by: me.person || me.name, made: me.id });
+    changed();
+    return json(res, 200, { ok: true, id: t.id });
+  }
   // Reminders: something to remember at a date and time. Each phone schedules its own notifications from these.
   if (m === "POST" && path === "/api/reminders") {
     const b = await body(req), text = String(b.text ?? "").trim().slice(0, 200), at = new Date(String(b.at ?? ""));

@@ -11,10 +11,10 @@
  * short passes (see `key()`), so the key is on no hub and use can be counted per device.
  */
 import { readFileSync } from "node:fs";
-import { CHARACTERS, CLIMATE_MODES, RULES, controlWords, ruleFor, type MediaItem, type Control, type ControlRequest, type Device, type Weather, type ListSummary, type Scene, type Room } from "../../../packages/core/src/index.ts";
+import { CHARACTERS, CLIMATE_MODES, RULES, controlWords, ruleFor, type MediaItem, type Control, type ControlRequest, type Device, type Weather, type ListSummary, type Scene, type Room, type Timer, timerWords } from "../../../packages/core/src/index.ts";
 
 export interface TalkTurn { role: "you" | "host"; text: string }
-export interface TalkHouse { devices: Device[]; rooms: Room[]; scenes: Scene[]; weather?: Weather; lists: ListSummary[]; homeName: string; timeZone: string }
+export interface TalkHouse { devices: Device[]; rooms: Room[]; scenes: Scene[]; weather?: Weather; lists: ListSummary[]; timers: Timer[]; homeName: string; timeZone: string }
 export interface TalkAsker { name: string; person: string; deny: string[]; /** The room this phone or tablet lives in, when it has said so. */ room?: string }
 export interface TalkDeps {
   house: () => Promise<TalkHouse>;
@@ -22,6 +22,12 @@ export interface TalkDeps {
   runScene: (scene: Scene, allowed: (kind: string) => boolean) => Promise<{ done: number; failed: number }>;
   /** Finds something to play by name for one speaker and starts it: the household's saved things first, then the stations and services it has. */
   music: (speakerId: string, query: string, from?: string) => Promise<{ title: string; from: string } | { choices: { title: string; from: string; source: string }[] } | null>;
+  /** Starts a timer that rings on the device that asked. */
+  setTimer: (seconds: number, name: string) => Timer;
+  stopTimer: (id: string) => void;
+  /** A reminder for the whole home, at a moment in time. */
+  remind: (text: string, at: Date, repeat: string) => void;
+  listAdd: (listId: string, text: string) => Promise<void>;
   /** Writes a line in the home's activity log against the device that asked. */
   say: (what: string, kind: string) => void;
 }
@@ -57,7 +63,11 @@ What you may do:
 - With the tools, you may switch lights and plugs, dim lights, pause, resume, skip and set the volume of music, set thermostats, run the home's scenes, and lock doors or close garage doors and shades.
 - You can NEVER unlock a door or open a garage door or shade. If asked, say kindly that for safety that has to be done by hand in the app, under Security.
 - You may start music by name with play_music: an artist, a song, a style ("some jazz"), a station or a playlist. It needs a room. If the person names a room, use it. If they do not, use their device's own room when WHO YOU ARE TALKING TO gives one. If neither, ask which room before playing anything, and name two or three rooms that have a speaker.
-- You cannot change settings, add devices, or see cameras.
+- Timers: set_timer starts one ("set a timer for ten minutes", "a pasta timer for 8 minutes"); it counts down on the screen and rings on the person's device. stop_timer stops or cancels one, ringing or not. Running timers are in THE HOUSE NOW; to say how long is left, look there.
+- Reminders and alarms: remind_me sets one for a day and time ("remind me to call the vet at 4", "wake me at 7 tomorrow", "every Monday at 9"). Work the date and time out from "Now" in THE HOUSE NOW. If no time of day was given, ask for one.
+- Lists: add_to_list puts something on one of the home's lists ("add milk to the shopping list"). Several things in one request: call it once for each.
+- You can also simply answer what a household helper is asked all day: the time and date, the weather, sums and unit conversions (cups to millilitres, Fahrenheit to Celsius), spelling, quick facts, a joke.
+- You cannot change settings, add devices, or see cameras. You cannot make phone calls, send messages, or buy anything.
 - After using a tool, say what you did in a few words. If a tool reports a refusal, tell the person plainly.
 
 What you must not do, whoever asks and however they ask:
@@ -92,7 +102,7 @@ function houseNow(h: TalkHouse): { text: string; handles: Map<string, { d: Devic
     handles.set(handle, { d, c });
     lines.push(`[${handle}] ${labelOf(d, c)} (${c.kind}, in ${roomsOf(d, h.rooms)}): ${stateOf(c)}`);
   }
-  const when = new Date().toLocaleString("en-US", { timeZone: h.timeZone || undefined, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const when = new Date().toLocaleString("en-US", { timeZone: h.timeZone || undefined, weekday: "long", month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
   const w = h.weather;
   const text = [
     `Home: ${h.homeName}. Now: ${when}.`,
@@ -101,9 +111,21 @@ function houseNow(h: TalkHouse): { text: string; handles: Map<string, { d: Devic
     "Devices (handle, name, kind, room: state):",
     ...(lines.length ? lines : ["(none added yet)"]),
     `Scenes that can be run: ${h.scenes.map((s) => `"${s.name}"${s.room ? ` (${h.rooms.find((r) => r.id === s.room)?.name ?? "a room"})` : " (whole home)"}`).join(", ") || "none"}.`,
+    `Timers: ${h.timers.map((t) => { const left = (Date.parse(t.ends) - Date.now()) / 1000; return `${t.name ? `"${t.name}"` : `the ${timerWords(t.seconds)} timer`}${left > 0 ? `, ${timerWords(left)} left` : ", finished and RINGING"}`; }).join("; ") || "none running"}.`,
     `Lists: ${h.lists.map((l) => `${l.name} (${l.open} to do)`).join(", ") || "none"}.`,
   ].join("\n");
   return { text, handles };
+}
+
+/** A date and time as the home's own clock reads it ("2026-03-09T16:30"), as a moment in time. */
+function localTime(local: string, zone: string): Date | null {
+  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/.exec(local.trim());
+  if (!m) return null;
+  const guess = Date.parse(`${m[1]}T${m[2]}:00Z`);
+  if (Number.isNaN(guess)) return null;
+  let shown = guess;
+  try { shown = Date.parse(new Date(guess).toLocaleString("sv-SE", { timeZone: zone || undefined }).replace(" ", "T") + "Z"); } catch { /* a zone the hub does not know: its own clock */ }
+  return new Date(guess - (shown - guess));
 }
 
 const TOOLS = [{ functionDeclarations: [
@@ -122,6 +144,21 @@ const TOOLS = [{ functionDeclarations: [
     }, required: ["query", "room"] } },
   { name: "run_scene", description: "Run one of the home's scenes by its exact name.",
     parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
+  { name: "set_timer", description: "Start a countdown timer. It shows on the screen and rings when it ends.",
+    parameters: { type: "OBJECT", properties: {
+      seconds: { type: "NUMBER", description: "How long, in seconds. Ten minutes is 600." },
+      name: { type: "STRING", description: "What it is for, in a word or two, only if the person said: pasta, laundry, nap." },
+    }, required: ["seconds"] } },
+  { name: "stop_timer", description: "Stop a timer that is ringing, or cancel one still counting down.",
+    parameters: { type: "OBJECT", properties: { name: { type: "STRING", description: "Which one, by its name or length, when more than one is running. Leave out when there is only one." } } } },
+  { name: "remind_me", description: "Set a reminder or an alarm for a day and time.",
+    parameters: { type: "OBJECT", properties: {
+      text: { type: "STRING", description: "What to be reminded of, in a few words. For a plain alarm: Alarm." },
+      when: { type: "STRING", description: "The home's own local date and time, written like 2026-03-09T16:30." },
+      repeat: { type: "STRING", enum: ["day", "weekdays", "week", "month", "year"], description: "Only when it should repeat." },
+    }, required: ["text", "when"] } },
+  { name: "add_to_list", description: "Add one thing to one of the home's lists.",
+    parameters: { type: "OBJECT", properties: { list: { type: "STRING", description: "The list's name, as in THE HOUSE NOW." }, item: { type: "STRING" } }, required: ["list", "item"] } },
 ] }];
 const ALLOWED: Record<string, string[]> = { light: ["on", "off", "brightness"], switch: ["on", "off"], media: ["pause", "play", "next", "volume"], climate: ["target", "mode"], lock: ["lock"], cover: ["close"] };
 const SAFETY = ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"].map((category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" }));
@@ -253,6 +290,42 @@ export class Talk {
       const r = await this.deps.runScene(scene, (kind) => !barred(kind));
       this.deps.say(`Ran the scene "${scene.name}" by asking the host`, "scenes");
       return { ok: true, did: `Ran the scene "${scene.name}"${r.failed ? `; ${r.failed} thing${r.failed === 1 ? "" : "s"} did not answer` : ""}` };
+    }
+    if (name === "set_timer") {
+      const seconds = Math.round(Number(args.seconds));
+      if (!(seconds >= 1)) return { ok: false, error: "Ask how long the timer should be." };
+      if (seconds > 24 * 3600) return { ok: false, error: "A timer can be a day long at most. For longer, offer a reminder." };
+      if (house.timers.length >= 8) return { ok: false, error: "Eight timers are already running. One has to be stopped first." };
+      const t = this.deps.setTimer(seconds, String(args.name ?? "").trim().slice(0, 30));
+      return { ok: true, did: `${t.name ? `${t.name[0].toUpperCase()}${t.name.slice(1)} timer` : "Timer"} set for ${timerWords(seconds)}` };
+    }
+    if (name === "stop_timer") {
+      const all = house.timers, wanted = String(args.name ?? "").trim().toLowerCase();
+      if (!all.length) return { ok: false, error: "No timer is running." };
+      const ringing = all.filter((t) => Date.parse(t.ends) <= Date.now());
+      const named = wanted ? all.filter((t) => (t.name && (t.name.toLowerCase().includes(wanted) || wanted.includes(t.name.toLowerCase()))) || wanted.includes(timerWords(t.seconds))) : [];
+      // No name given: whatever is ringing is what "stop" means; otherwise the only one there is.
+      const which = named.length ? named : !wanted && ringing.length ? ringing : all.length === 1 ? all : [];
+      if (!which.length) return { ok: false, error: `Ask which one. Running: ${all.map((t) => t.name || `the ${timerWords(t.seconds)} timer`).join(", ")}.` };
+      for (const t of which) this.deps.stopTimer(t.id);
+      return { ok: true, did: which.length === 1 ? `Stopped ${which[0].name ? `the ${which[0].name} timer` : "the timer"}` : `Stopped ${which.length} timers` };
+    }
+    if (name === "remind_me") {
+      const text = String(args.text ?? "").trim().slice(0, 200), at = localTime(String(args.when ?? ""), house.timeZone);
+      if (!text || !at) return { ok: false, error: "A reminder needs something to remember, and a day and time." };
+      if (at.getTime() < Date.now() - 60_000) return { ok: false, error: "That time has already passed. Ask which day they mean." };
+      const repeat = ["day", "weekdays", "week", "month", "year"].includes(String(args.repeat)) ? String(args.repeat) : "";
+      this.deps.remind(text, at, repeat);
+      const said = at.toLocaleString("en-US", { timeZone: house.timeZone || undefined, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return { ok: true, did: `Reminder set: ${text}, ${said}${repeat ? `, every ${repeat === "weekdays" ? "weekday" : repeat}` : ""}` };
+    }
+    if (name === "add_to_list") {
+      const item = String(args.item ?? "").trim().slice(0, 200), wanted = String(args.list ?? "").trim().toLowerCase();
+      if (!item) return { ok: false, error: "Nothing was named to add." };
+      const list = house.lists.find((l) => l.name.toLowerCase() === wanted) ?? house.lists.find((l) => wanted && (l.name.toLowerCase().includes(wanted) || wanted.includes(l.name.toLowerCase()))) ?? (house.lists.length === 1 ? house.lists[0] : undefined);
+      if (!list) return { ok: false, error: `Ask which list. The home's lists: ${house.lists.map((l) => l.name).join(", ") || "none yet"}.` };
+      await this.deps.listAdd(list.id, item);
+      return { ok: true, did: `Added ${item} to ${list.name}` };
     }
     if (name === "play_music") {
       if (barred("media")) return { ok: false, error: "The home's owner has not allowed this device to control music and TV." };

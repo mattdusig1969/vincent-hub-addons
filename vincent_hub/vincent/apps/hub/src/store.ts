@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { ControlRequest, ListStatus, Palette, Reminder, Repeat, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
+import type { ControlRequest, ListStatus, Palette, Reminder, Repeat, Timer, Room, RoomKind, Scene, SceneWhen } from "../../../packages/core/src/index.ts";
 
 /** The parts of the look one phone or tablet may choose for itself. Anything left out follows the home. */
 export interface DeviceLook { theme?: string; palette?: Palette; style?: string; custom?: { font: string; shape: string; outfits?: Record<string, string> }; character?: string; rotate?: string; voices?: Record<string, { locale: string; voice: string }> }
@@ -50,6 +50,8 @@ interface Saved {
   colors?: number[];
   /** Things to remember at a date and time. `for` = the one device it belongs to, or "" for everyone. */
   reminders?: Reminder[];
+  /** Running timers, and ones that rang in the last few minutes. `made` = the device that set it. */
+  timers?: (Timer & { made: string })[];
   /** scene id -> the home's date it last ran by itself, so a schedule fires once a day even across a restart. */
   scenesRan?: Record<string, string>;
   /** True once the home has been given its Everything off scene. */
@@ -324,6 +326,18 @@ export const store = {
     const held = new Set((saved.apple?.[deviceId]?.rows ?? []).filter((r) => r.kind === "rem" && r.a).map((r) => r.v));
     return (saved.reminders ?? []).filter((r) => (!r.for || r.for === deviceId) && !(r.done && Date.parse(r.done) < old)).map(({ made: _m, ...r }) => ({ ...r, mine: r.for === deviceId, ...(held.has(r.id) ? { quiet: true } : {}) }));
   },
+  /** Timers still counting, and ones that ended in the last ten minutes (still ringing, until stopped). */
+  timers(deviceId: string): Timer[] {
+    const all = saved.timers ?? [], live = all.filter((t) => Date.parse(t.ends) > Date.now() - 10 * 60_000);
+    if (live.length !== all.length) { saved.timers = live; save(); }
+    return live.map(({ made, ...t }) => ({ ...t, mine: made === deviceId })).sort((a, b) => a.ends.localeCompare(b.ends));
+  },
+  addTimer(t: { name: string; seconds: number; by: string; made: string }): Timer {
+    const timer = { id: randomBytes(6).toString("hex"), name: t.name, seconds: t.seconds, ends: new Date(Date.now() + t.seconds * 1000).toISOString(), by: t.by, made: t.made };
+    saved.timers = [...(saved.timers ?? []), timer].slice(-20); save();
+    return timer;
+  },
+  removeTimer(id: string): boolean { const had = (saved.timers ?? []).length; saved.timers = (saved.timers ?? []).filter((t) => t.id !== id); save(); return saved.timers.length !== had; },
   get allReminders(): Reminder[] { return saved.reminders ?? []; },
   setReminders(all: Reminder[]): void { saved.reminders = all.slice(-600); save(); },
   appleOf(deviceId: string): AppleSaved | undefined { const a = saved.apple?.[deviceId]; return a && { ...a, lists: { ...a.lists }, rows: a.rows.map((r) => ({ ...r })) }; },

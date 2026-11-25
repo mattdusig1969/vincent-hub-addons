@@ -207,6 +207,19 @@ export interface WeatherDay {
 export interface ListSummary { id: string; name: string; /** How many things are still to do. */ open: number }
 export interface ListItem { id: string; text: string; done: boolean }
 
+/** A kitchen timer: counts down to `ends` and then rings, on the phone or tablet that set it, until it is stopped. Every screen shows it. */
+export interface Timer { id: string; /** "" when it was given no name. */ name: string; ends: string; /** Its whole length, in seconds. */ seconds: number; /** Who set it. */ by: string; /** Set on this device: this is the one that rings. */ mine?: boolean }
+/** "4:05" or "1:02:09" left of a number of seconds. */
+export function timerLeft(seconds: number): string {
+  const s = Math.max(0, Math.ceil(seconds)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), two = (n: number) => String(n).padStart(2, "0");
+  return h ? `${h}:${two(m)}:${two(s % 60)}` : `${m}:${two(s % 60)}`;
+}
+/** A length in words: "10 minutes", "1 hour 30 minutes", "45 seconds". */
+export function timerWords(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60, n = (v: number, w: string) => `${v} ${w}${v === 1 ? "" : "s"}`;
+  return [h && n(h, "hour"), m && n(m, "minute"), r && !h && n(r, "second")].filter(Boolean).join(" ") || "0 seconds";
+}
+
 /** Where the home is. Empty until a ZIP code is given. */
 export interface HomePlace { zip: string; place: string; timeZone: string; contact: string }
 
