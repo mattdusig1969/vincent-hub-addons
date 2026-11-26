@@ -34,6 +34,7 @@ const WHY: Record<string, string> = {
 /** These always get our word, whatever the maker calls them: nobody at home says "host". */
 /** Where a maker's own wording leaves people guessing, ours: by driver, then by the field's name. */
 const PLAINER: Record<string, Record<string, { label: string; help: string; required?: boolean }>> = {
+  songpal: { endpoint: { label: "Address", help: "Type http:// then the device's address, then :10000/sony. For example http://192.168.1.42:10000/sony. The address is shown in the device's network settings." } },
   tuya: { user_code: { label: "User Code", help: "From the Smart Life or Tuya Smart app: Me, the gear, Account and Security. Letters and numbers, typed exactly." } },
   generic: {
     stream_source: { required: true, label: "The camera's stream address", help: "Starts with rtsp:// and is shown in the camera's own app where you switched the stream on. Type it exactly." },
@@ -162,6 +163,12 @@ export class Flows {
     }
     const lost = HOST_HELP[driver];
     if (asksHost && lost) { step = { ...step, text: lost.text, fields: step.fields.map((f) => (f.name === "host" ? { ...f, label: "The TV's address, only if Vincent cannot find it", required: false, help: lost.help } : f)) }; const o = this.open.get(step.flow!); if (o) { o.fields = step.fields; o.look = true; } this.last.set(step.flow!, step); }
+    // A maker that asks for an address and says nothing more: our words on where that address is shown.
+    if (step.kind === "form" && step.flow && step.fields.some((f) => f.name === "host" && f.type === "text")) {
+      const fields = step.fields.map((f) => (f.name === "host" && !f.help ? { ...f, help: "The device shows its address in its own network settings. It is four numbers with dots, like 192.168.1.42." } : f.name === "port" && !f.help ? { ...f, help: "Leave this as it is unless the device's settings show a different number." } : f));
+      step = { ...step, text: !step.text || step.text.length < 90 ? tips ?? step.text : step.text, fields };
+      const o = this.open.get(step.flow!); if (o) o.fields = fields; this.last.set(step.flow!, step);
+    }
     return step;
   }
   /** More than one found: which one is asked, never an address typed. */

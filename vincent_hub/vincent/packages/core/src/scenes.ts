@@ -136,9 +136,15 @@ const sleep: Recipe = (h) => [...h.lights.map(off), ...h.music.map(hush), ...h.c
 
 /** A television or a TV box, as against a music speaker. */
 export const isScreen = (c: Control): boolean => c.kind === "media" && c.library === "none" && (!!c.remote || c.inputs.length >= 2);
+/**
+ * Whether one of a TV's sources is a socket on its back (something plugged in) rather than an app on the TV itself.
+ * A TV lists both together, and an app can carry the same name as a box: LG's "Apple TV" is its app, "Apple OTT" the box on HDMI.
+ */
+export const isPlugged = (name: string): boolean =>
+  /hdmi|\bott\b|set.?top|\bstb\b|console|blu.?ray|\bdvd\b|\bpc\b|\bav ?\d?\b|component|composite|antenna|live ?tv|home theat|sound ?bar|receiver|streaming (box|stick)|playstation|\bps ?[345]\b|xbox|nintendo|cable|satellite|\busb\b/i.test(name);
 /** Things plugged into a TV, by how their input is usually named, and what using one is called. */
 const SOURCES: { id: string; test: RegExp; name: string; icon: string }[] = [
-  { id: "appletv", test: /apple ?tv/i, name: "Watch Apple TV", icon: "tv" },
+  { id: "appletv", test: /apple ?(tv|ott|box)/i, name: "Watch Apple TV", icon: "tv" },
   { id: "playstation", test: /playstation|\bps ?[345]\b/i, name: "Play PlayStation", icon: "game" },
   { id: "xbox", test: /xbox/i, name: "Play Xbox", icon: "game" },
   { id: "nintendo", test: /nintendo|\bswitch\b/i, name: "Play Nintendo", icon: "game" },
@@ -165,7 +171,9 @@ function watching(parts: Part[]): { id: string; name: string; icon: string; step
   for (const src of SOURCES) {
     if (out.length >= 3) break;
     const box = boxes.find((b) => src.test.test(`${b.d.model} ${b.d.makerName} ${b.d.name}`));
-    const tv = tvs.map((p) => ({ p, name: (p.c as Extract<Control, { kind: "media" }>).inputs.find((i) => src.test.test(i)) })).find((x) => x.name);
+    // The socket the box is plugged into comes before an app of the same name on the TV. With the box in the room, the app is never what was meant.
+    const pick = (p: Part) => { const m = (p.c as Extract<Control, { kind: "media" }>).inputs.filter((i) => src.test.test(i)); return m.find(isPlugged) ?? (box ? undefined : m[0]); };
+    const tv = tvs.map((p) => ({ p, name: pick(p) })).find((x) => x.name);
     const steps: ControlRequest[] = [...(tv ? [input(tv.p, tv.name!)] : []), ...(box ? [{ id: box.c.id, action: "on" } as ControlRequest] : [])];
     if (steps.length) out.push({ id: `watch-${src.id}`, name: src.name, icon: src.icon, steps });
   }
@@ -270,7 +278,7 @@ export function stepWords(step: ControlRequest, devices: Device[]): string {
     case "on": return `${name} on`;
     case "brightness": { const tint = tintName(step); return `${name} at ${step.value}%${tint ? `, ${tint.toLowerCase()}` : ""}`; }
     case "pause": return `${name}: music stops`;
-    case "play": if (step.item?.kind === "input" && p.c.kind === "media" && p.c.library === "none") return `${name} switches to ${step.item.title}`;
+    case "play": if (step.item?.kind === "input" && p.c.kind === "media" && p.c.library === "none") return isPlugged(step.item.title) ? `${name} switches to ${step.item.title}` : `${name} opens its ${step.item.title} app`;
       return step.item ? `${name} plays ${step.item.title}${step.value !== undefined ? ` at ${step.value}%` : ""}` : `${name} plays`;
     case "open": return `${name} open`;
     case "close": return `${name} closed`;
