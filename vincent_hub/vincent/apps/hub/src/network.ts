@@ -9,6 +9,7 @@
  * Nothing leaves the home: the knock is one empty packet per address, and only makers are counted.
  */
 import { createSocket } from "node:dgram";
+import { connect } from "node:net";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
@@ -46,6 +47,22 @@ export class Network {
   private makerByIp = new Map<string, string>(); // home address -> maker, for devices that do not say who made them
   /** Who made the device at this address, when its network address tells. A camera added by its stream address has no other name. */
   makerAt(ip: string): string | undefined { return this.makerByIp.get(ip); }
+  /**
+   * The addresses of LG televisions on the home network that are on right now: LG-made things that answer
+   * where a webOS TV listens (an LG washer or fridge does not). So nobody is asked to type a TV's address.
+   */
+  async lgTvs(): Promise<string[]> {
+    if (!this.makerByIp.size) await this.seen().catch(() => undefined);
+    const lg = [...this.makerByIp].filter(([, maker]) => /^LG\b/i.test(maker)).map(([ip]) => ip);
+    const open = (ip: string, port: number) => new Promise<boolean>((ok) => {
+      const s = connect({ host: ip, port });
+      const done = (v: boolean) => { s.destroy(); ok(v); };
+      s.setTimeout(900, () => done(false)); s.once("connect", () => done(true)); s.once("error", () => done(false));
+    });
+    const found = await Promise.all(lg.map(async (ip) => ((await open(ip, 3001)) || (await open(ip, 3000)) ? ip : "")));
+    // None answering: the TV is most likely off. The LG-made things are still the best guess at where it is.
+    return found.some(Boolean) ? found.filter(Boolean) : lg;
+  }
   private macByIp = new Map<string, string>(); // home address -> network address, to recognise a camera added by its stream address
   private listening = false;
 

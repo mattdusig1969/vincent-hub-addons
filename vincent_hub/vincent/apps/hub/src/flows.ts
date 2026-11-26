@@ -47,6 +47,10 @@ const PLAINER: Record<string, Record<string, { label: string; help: string; requ
   },
 };
 /** Tuya says "login error" for two different things; which one depends on the step. */
+/** When the hub could not find the device by itself: what to do, and where the address is. */
+const HOST_HELP: Record<string, { text: string; help: string }> = {
+  webostv: { text: "Vincent could not find the TV by itself. Turn the TV on and check it is on the same Wi-Fi as the hub, then close this and try again. Or type the TV's address below.", help: "On the TV: Settings, then Network, then your Wi-Fi or wired connection. The address is four numbers with dots, like 192.168.1.42." },
+};
 const TUYA_WHY: Record<string, string> = {
   user: "That User Code was not accepted. Look at it again in the app (Me, the gear, Account and Security) and type it exactly: capitals matter.",
   scan: "The Smart Life app has not approved it yet, or the code ran out. Scan the new code below and confirm in the app, then tap Continue.",
@@ -88,6 +92,8 @@ export class Flows {
   preparers: Record<string, Preparer> = {};
   /** The address a phone on the home Wi-Fi can open Home Assistant's own pages at, given the address it reaches this hub by. */
   haUrl?: (host: string) => Promise<string>;
+  /** By driver: the addresses on the home network where that maker's device is answering now, so the household is not asked to type one. */
+  hostsFor?: (driver: string) => Promise<string[]>;
   /** Sign-ins whose website visit has finished (Home Assistant says so; asking it before then would end the visit early). */
   private finished = new Set<string>();
   /** The hub saw the website visit finish (the closing page was asked for). */
@@ -129,8 +135,33 @@ export class Flows {
   }
   private async begin(driver: string, rooms: string[], tips?: string, name?: string, hassUrl?: string): Promise<Step> {
     const r = await this.ha.restRaw("POST", "/config/config_entries/flow", { handler: driver, show_advanced_options: false });
-    const step = await this.read(r.body, driver, rooms, undefined, tips, name);
+    let step = await this.read(r.body, driver, rooms, undefined, tips, name);
     if (step.flow && hassUrl) { const o = this.open.get(step.flow); if (o) o.hassUrl = hassUrl; }
+    // The maker asks for the device's address first. Nobody knows that by heart: the hub looks for it instead.
+    const asksHost = step.kind === "form" && step.flow && step.fields.some((f) => f.name === "host") && step.fields.every((f) => f.name === "host" || !f.required);
+    if (asksHost && this.hostsFor) {
+      const hosts = await this.hostsFor(driver).catch(() => [] as string[]);
+      if (hosts.length === 1) {
+        const next = await this.answer(step.flow!, { host: hosts[0] });
+        // Only when that address was accepted; otherwise the question stands, with what to check.
+        if (!(next.kind === "form" && next.fields.some((f) => f.name === "host"))) return next;
+        // Found, but not answering: it is off. Its address is filled in, so switching it on and tapping Continue is all there is to do.
+        const filled = next.fields.map((f) => (f.name === "host" ? { ...f, label: "The TV's address", value: hosts[0], help: "Found by Vincent. Leave it as it is." } : f));
+        step = { ...next, text: "Vincent found your LG TV, but it is not answering, so it is probably off. Turn the TV on, wait a few seconds, then tap Continue.", errors: {}, fields: filled };
+        const o = this.open.get(step.flow!); if (o) o.fields = filled;
+        this.last.set(step.flow!, step);
+        return step;
+      } else if (hosts.length > 1) {
+        const o = this.open.get(step.flow!);
+        const field: StepField = { name: "host", label: "Which TV?", help: "Vincent found more than one. If you are not sure which is which, the TV shows its address under Settings, Network.", type: "choice", required: true, value: hosts[0], options: hosts.map((h, i) => ({ value: h, label: `TV ${i + 1} (${h})` })) };
+        if (o) o.fields = [field];
+        step = { ...step, text: "Turn on the TV you want to add, then choose it.", fields: [field] };
+        this.last.set(step.flow!, step);
+        return step;
+      }
+    }
+    const lost = HOST_HELP[driver];
+    if (asksHost && lost) { step = { ...step, text: lost.text, fields: step.fields.map((f) => (f.name === "host" ? { ...f, label: "The TV's address", help: lost.help } : f)) }; const o = this.open.get(step.flow!); if (o) o.fields = step.fields; this.last.set(step.flow!, step); }
     return step;
   }
 
