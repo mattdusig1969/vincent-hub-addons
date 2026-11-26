@@ -100,6 +100,7 @@ flows.preparers[ECHO_DRIVER] = echo;
 // Amazon's sign-in page is asked for at the hub's own address (see `amazon` below), the one this phone already reaches it by.
 flows.haUrl = async (host) => `http://${host}`;
 flows.hostsFor = async (driver) => (driver === "webostv" ? network.lgTvs() : []);
+flows.hostAnswers = async (driver, host) => (driver === "webostv" ? network.lgAt(host) : true);
 // A found device with nothing to ask is answered with a plain yes; anything more goes to the app as a question.
 devices.steps = async (flowId, handler, rooms) => {
   const first = await flows.startFound(flowId, handler, rooms);

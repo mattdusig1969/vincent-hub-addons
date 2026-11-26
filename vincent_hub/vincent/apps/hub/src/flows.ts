@@ -49,7 +49,15 @@ const PLAINER: Record<string, Record<string, { label: string; help: string; requ
 /** Tuya says "login error" for two different things; which one depends on the step. */
 /** When the hub could not find the device by itself: what to do, and where the address is. */
 const HOST_HELP: Record<string, { text: string; help: string }> = {
-  webostv: { text: "Vincent could not find the TV by itself. Turn the TV on and check it is on the same Wi-Fi as the hub, then close this and try again. Or type the TV's address below.", help: "On the TV: Settings, then Network, then your Wi-Fi or wired connection. The address is four numbers with dots, like 192.168.1.42." },
+  webostv: { text: "No LG TV is answering on your home network. Turn the TV on, then tap Continue and Vincent looks again. If the TV is already on, it has dropped off the network: on the TV open Settings, then Network, and check it says Connected, on the same network as your hub.", help: "Leave this empty and Vincent looks for the TV. Only if that keeps failing: on the TV open Settings, then Network, then your Wi-Fi or wired connection, and type the address shown there. It is four numbers with dots, like 192.168.1.42." },
+};
+/** Said under the address when looking again still found nothing, or a typed address is not the device. */
+const HOST_STILL: Record<string, { none: string; wrong: string }> = {
+  webostv: { none: "Still no LG TV answering. On the TV open Settings, then Network. If it does not say Connected, connect it there, then tap Continue.", wrong: "No LG TV answers at that address. Check the numbers, and that the TV is on." },
+};
+/** A maker's reasons in our words where the general ones mislead: by driver. */
+const WHY_FOR: Record<string, Record<string, string>> = {
+  webostv: { cannot_connect: "The TV did not answer. Check it is on and connected to your home network (on the TV: Settings, then Network), then tap Continue.", error_pairing: "The TV did not get a yes. Tap Continue, then choose Yes on the TV with its remote." },
 };
 const TUYA_WHY: Record<string, string> = {
   user: "That User Code was not accepted. Look at it again in the app (Me, the gear, Account and Security) and type it exactly: capitals matter.",
@@ -57,6 +65,7 @@ const TUYA_WHY: Record<string, string> = {
 };
 /** Where a maker's own words for a whole step leave people guessing, ours: by driver, then by the step. */
 const STEPS: Record<string, Record<string, { title: string; text: string; picture?: string }>> = {
+  webostv: { pairing: { title: "Say yes on the TV", text: "Tap Continue, then look at the TV. It asks whether Vincent may connect: choose Yes with the TV's remote. Nothing to type." } },
   tuya: {
     user: { title: "Your Tuya or Smart Life account", text: "Vincent uses the account you already have, with everything already set up in it. Open the Smart Life or Tuya Smart app on your phone and tap Me at the bottom right. Tap the settings button at the top right, then Account and Security. Your User Code is at the bottom of that page." },
     scan: { title: "Approve it in the Smart Life app", picture: "help/tuya-scan.jpg", text: "Open the Smart Life or Tuya Smart app and tap Me at the bottom right. The scan button is at the top right, next to the settings button, as circled in the picture. Point it at the code below and confirm. If the app is on this same phone, take a screenshot of this page first, then in the app's scanner choose the picture from your photos. Come back here and tap Continue." },
@@ -69,11 +78,11 @@ const NESTED: Record<string, Record<string, Record<string, unknown>>> = { generi
 const OURS: Record<string, string> = { host: "Address", ip_address: "Address", address: "Address", device_input: "Name or address" };
 
 const plain = (s: string, vars: Record<string, unknown> = {}) =>
-  s.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? "")).replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[*_`]{1,2}([^*_`]+)[*_`]{1,2}/g, "$1")
+  s.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? "")).replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[*_`]{1,2}([^*_`]+)[*_`]{1,2}/g, "$1")
     .replace(/Home Assistant/g, "Vincent").replace(/\bSubmit\b/g, "Continue").replace(/\b[Tt]he host\b/g, "the address").replace(/\bIP address\b/g, "address").replace(/\n{2,}/g, "\n").trim();
 const titled = (s: string) => s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 
-interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string; step?: string; link?: boolean; hassUrl?: string; prepare?: boolean; nested?: Record<string, Record<string, unknown>> }
+interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string; step?: string; look?: boolean; link?: boolean; hassUrl?: string; prepare?: boolean; nested?: Record<string, Record<string, unknown>> }
 
 /** Something a brand needs on the hub before its sign-in can start (Echo: a part fetched once). */
 export interface Preparer { has(): Promise<boolean>; prepare(): void; state: string; message: string }
@@ -94,6 +103,8 @@ export class Flows {
   haUrl?: (host: string) => Promise<string>;
   /** By driver: the addresses on the home network where that maker's device is answering now, so the household is not asked to type one. */
   hostsFor?: (driver: string) => Promise<string[]>;
+  /** Whether the device of this driver really answers at an address, so a wrong one is caught before the maker's step. */
+  hostAnswers?: (driver: string, host: string) => Promise<boolean>;
   /** Sign-ins whose website visit has finished (Home Assistant says so; asking it before then would end the visit early). */
   private finished = new Set<string>();
   /** The hub saw the website visit finish (the closing page was asked for). */
@@ -145,24 +156,22 @@ export class Flows {
         const next = await this.answer(step.flow!, { host: hosts[0] });
         // Only when that address was accepted; otherwise the question stands, with what to check.
         if (!(next.kind === "form" && next.fields.some((f) => f.name === "host"))) return next;
-        // Found, but not answering: it is off. Its address is filled in, so switching it on and tapping Continue is all there is to do.
-        const filled = next.fields.map((f) => (f.name === "host" ? { ...f, label: "The TV's address", value: hosts[0], help: "Found by Vincent. Leave it as it is." } : f));
-        step = { ...next, text: "Vincent found your LG TV, but it is not answering, so it is probably off. Turn the TV on, wait a few seconds, then tap Continue.", errors: {}, fields: filled };
-        const o = this.open.get(step.flow!); if (o) o.fields = filled;
-        this.last.set(step.flow!, step);
-        return step;
       } else if (hosts.length > 1) {
-        const o = this.open.get(step.flow!);
-        const field: StepField = { name: "host", label: "Which TV?", help: "Vincent found more than one. If you are not sure which is which, the TV shows its address under Settings, Network.", type: "choice", required: true, value: hosts[0], options: hosts.map((h, i) => ({ value: h, label: `TV ${i + 1} (${h})` })) };
-        if (o) o.fields = [field];
-        step = { ...step, text: "Turn on the TV you want to add, then choose it.", fields: [field] };
-        this.last.set(step.flow!, step);
-        return step;
+        return this.which(step, hosts);
       }
     }
     const lost = HOST_HELP[driver];
-    if (asksHost && lost) { step = { ...step, text: lost.text, fields: step.fields.map((f) => (f.name === "host" ? { ...f, label: "The TV's address", help: lost.help } : f)) }; const o = this.open.get(step.flow!); if (o) o.fields = step.fields; this.last.set(step.flow!, step); }
+    if (asksHost && lost) { step = { ...step, text: lost.text, fields: step.fields.map((f) => (f.name === "host" ? { ...f, label: "The TV's address, only if Vincent cannot find it", required: false, help: lost.help } : f)) }; const o = this.open.get(step.flow!); if (o) { o.fields = step.fields; o.look = true; } this.last.set(step.flow!, step); }
     return step;
+  }
+  /** More than one found: which one is asked, never an address typed. */
+  private which(step: Step, hosts: string[]): Step {
+    const o = this.open.get(step.flow!);
+    const field: StepField = { name: "host", label: "Which TV?", help: "Vincent found more than one that is on. If you are not sure which is which, the TV shows its address under Settings, Network.", type: "choice", required: true, value: hosts[0], options: hosts.map((h, i) => ({ value: h, label: `TV ${i + 1} (${h})` })) };
+    if (o) { o.fields = [field]; o.look = false; }
+    const next: Step = { ...step, text: "Turn on the TV you want to add, then choose it.", errors: {}, fields: [field] };
+    this.last.set(step.flow!, next);
+    return next;
   }
 
   /** Carries on with something the hub found that is waiting for an answer. */
@@ -175,6 +184,18 @@ export class Flows {
   async answer(flowId: string, values: Record<string, unknown>): Promise<Step> {
     const o = this.open.get(flowId);
     if (!o) return stopped("That setup has ended. Start it again.");
+    // The hub was asked to look again (nothing answered the first time), or an address was typed: it must really be the device.
+    if (o.look) {
+      const still = HOST_STILL[o.domain]; const was = this.last.get(flowId)!;
+      const typed = String(values.host ?? "").trim();
+      if (typed) { if (this.hostAnswers && !(await this.hostAnswers(o.domain, typed).catch(() => true))) return { ...was, errors: { host: still?.wrong ?? WHY.cannot_connect } }; }
+      else {
+        const hosts = this.hostsFor ? await this.hostsFor(o.domain).catch(() => [] as string[]) : [];
+        if (!hosts.length) return { ...was, errors: { host: still?.none ?? WHY.cannot_connect } };
+        if (hosts.length > 1) return this.which(was, hosts);
+        values = { ...values, host: hosts[0] };
+      }
+    }
     const data: Record<string, unknown> = {};
     // Echo: the household is asked three things; the hub fills in where Amazon's page is to be shown from.
     if (o.domain === "alexa_media" && o.step === "user") { data.email = ""; data.password = ""; if (o.hassUrl) data.hass_url = o.hassUrl; }
@@ -299,7 +320,7 @@ export class Flows {
         let fields = ((r.data_schema ?? []) as any[]).filter((e) => e.type !== "expandable" && !HIDDEN[domain]?.includes(e.name)).filter((e) => e.required || !(e.type === "multi_select" || e.selector?.select?.multiple || e.selector?.select?.custom_value))
           .map((e): StepField => field(e, say(`step.${r.step_id}.data.${e.name}`), say(`step.${r.step_id}.data_description.${e.name}`)))
           .map((f): StepField => ({ ...f, ...(PLAINER[String(r.handler)]?.[f.name] ?? {}) }));
-        const errors = Object.fromEntries(Object.entries((r.errors ?? {}) as Record<string, string>).map(([k, v]) => [k, plain(WHY[v] ?? (domain === "tuya" && v === "login_error" ? TUYA_WHY[String(r.step_id)] : undefined) ?? say(`error.${v}`) ?? titled(String(v)), r.description_placeholders)]));
+        const errors = Object.fromEntries(Object.entries((r.errors ?? {}) as Record<string, string>).map(([k, v]) => [k, plain(WHY_FOR[domain]?.[v] ?? WHY[v] ?? (domain === "tuya" && v === "login_error" ? TUYA_WHY[String(r.step_id)] : undefined) ?? say(`error.${v}`) ?? titled(String(v)), r.description_placeholders)]));
         // Echo's first form has a dozen technical settings; a household is asked for three things and the rest keep their defaults.
         const echoFirst = domain === "alexa_media" && r.step_id === "user";
         if (echoFirst) {
