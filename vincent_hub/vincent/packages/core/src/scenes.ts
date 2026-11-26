@@ -25,6 +25,8 @@ export interface Scene {
   says?: string[];
   /** "off" = the home's own Everything off: its steps are worked out afresh each time, so lights and speakers added later are included. */
   auto?: "off";
+  /** For an "off" scene: the things the household took out of it. Everything else in the home, now and later, is still switched off. */
+  except?: string[];
 }
 
 /** What was typed as the things to say, tidied: a few short phrases. */

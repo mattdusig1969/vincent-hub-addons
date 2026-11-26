@@ -73,7 +73,7 @@ import { MatterKeeper } from "./matter.ts";
 import { changes } from "./changes.ts";
 import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
-import type { Repeat, Scene } from "../../../packages/core/src/index.ts";
+import type { Device, Repeat, Scene } from "../../../packages/core/src/index.ts";
 import { dayKey, whenDue, whenWords, everythingOff, cleanSays, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
 import { THEMES, CUSTOM_THEME, cleanPalette, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
@@ -84,7 +84,11 @@ const media = new Media(ha, devices);
 const cameras = new Cameras(ha, devices, dataDir);
 const scenes = new Scenes(devices, media);
 /** The home's scenes as they stand now: Everything off is worked out from the devices in the home this minute. */
-const scenesNow = async (): Promise<Scene[]> => { const list = store.scenes(); if (!list.some((x) => x.auto === "off")) return list; const all = await devices.all(); return list.map((x) => (x.auto === "off" ? { ...x, steps: everythingOff(all) } : x)); };
+/** The home's own Everything off: changing it used to freeze it, so things added afterwards were left on. It is the home's own again. */
+const isOffScene = (x: Scene) => x.auto === "off" || (x.id === "everything-off" && !x.room);
+/** Its steps this minute: every light, speaker and TV in the home, less what the household took out, plus anything they set differently or added. */
+const offSteps = (x: Scene, all: Device[]) => { const out = new Set(x.except ?? []), own = x.auto === "off" ? x.steps : []; return [...everythingOff(all).filter((a) => !out.has(a.id) && !own.some((o) => o.id === a.id)), ...own]; };
+const scenesNow = async (): Promise<Scene[]> => { const list = store.scenes(); if (!list.some(isOffScene)) return list; const all = await devices.all(); return list.map((x) => (isOffScene(x) ? { ...x, auto: "off" as const, steps: offSteps(x, all) } : x)); };
 const intercom = new Intercom((id) => store.rooms().find((r) => r.id === id)?.name ?? "");
 const place = new Place(ha);
 const lists = new Lists(ha);
@@ -546,7 +550,15 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (room && !store.rooms().some((r) => r.id === room)) return json(res, 404, { error: "That room is gone." });
     const steps = cleanSteps(b.steps);
     if (!steps.length) return json(res, 400, { error: "A scene needs at least one thing to set." });
-    const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps, when: cleanWhen(b.when), says: cleanSays(b.says) });
+    // Everything off stays the home's own when it is changed: only what was taken out, set differently or added is kept, so later devices still join it.
+    const was = b.id ? store.scenes().find((x) => x.id === String(b.id)) : undefined;
+    let keep = steps, off: { auto?: "off"; except?: string[] } = {};
+    if (was && isOffScene(was) && !room) {
+      const auto = everythingOff(await devices.all());
+      keep = steps.filter((st) => !auto.some((a) => a.id === st.id && a.action === st.action));
+      off = { auto: "off", except: auto.filter((a) => !steps.some((st) => st.id === a.id)).map((a) => a.id) };
+    }
+    const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps: keep, when: cleanWhen(b.when), says: cleanSays(b.says), ...off });
     if (!id) return json(res, 404, { error: "That scene is gone." });
     { const sc = store.scenes().find((x) => x.id === id)!; say(`${b.id ? "Changed" : "Made"} the scene "${sc.name}" for ${roomWord(sc.room)}${sc.when?.on ? `. It runs by itself: ${whenWords(sc.when)}` : ""}`); }
     // A schedule set for a moment that has only just passed starts tomorrow; it does not fire the instant it is saved.
