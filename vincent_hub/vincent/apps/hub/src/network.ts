@@ -35,7 +35,7 @@ const BY_NAME: [RegExp, string, string[]][] = [
 /** Connections made once per device, so having one says nothing about the maker's other devices. */
 const PER_DEVICE = new Set(["generic", "homekit_controller", "onvif"]);
 /** One look serves for half an hour: knocking on every address is not something to do often (some routers take a burst of it for an attack). */
-const KEEP_MS = 30 * 60_000;
+const KEEP_MS = 2 * 60_000; // only looked at while someone has Add a device open, so a fresh look is cheap
 const clean = (mac: string) => mac.split(/[:-]/).map((x) => x.padStart(2, "0")).join("").toLowerCase();
 
 export class Network {
@@ -52,10 +52,24 @@ export class Network {
    * where a webOS TV listens (an LG washer or fridge does not). So nobody is asked to type a TV's address.
    */
   async lgTvs(): Promise<string[]> {
-    await this.seen().catch(() => undefined); // a TV just switched on is seen on this look
-    const lg = [...this.makerByIp].filter(([, maker]) => /^LG\b/i.test(maker)).map(([ip]) => ip);
-    const found = await Promise.all(lg.map(async (ip) => ((await this.lgAt(ip)) ? ip : "")));
+    // The TV says so itself when asked, within a couple of seconds, wherever it is and however new: no waiting on a look at the whole network.
+    const [said] = await Promise.all([this.ask("urn:lge-com:service:webos-second-screen:1", 2500), this.seen().catch(() => undefined)]);
+    const lg = new Set([...said, ...[...this.makerByIp].filter(([, maker]) => /^LG\b/i.test(maker)).map(([ip]) => ip)]);
+    const found = await Promise.all([...lg].map(async (ip) => ((await this.lgAt(ip)) ? ip : "")));
     return found.filter(Boolean);
+  }
+  /** Asks the home network who offers a service (the way TVs and speakers announce themselves); the addresses that answer. */
+  private ask(service: string, ms: number): Promise<string[]> {
+    return new Promise((ok) => {
+      const from = new Set<string>();
+      const sock = createSocket({ type: "udp4", reuseAddr: true });
+      const done = () => { try { sock.close(); } catch { /* closed */ } ok([...from]); };
+      sock.on("error", done);
+      sock.on("message", (_m, r) => from.add(r.address));
+      const q = Buffer.from(`M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: "ssdp:discover"\r\nMX: 1\r\nST: ${service}\r\n\r\n`);
+      sock.bind(() => { for (const at of [0, 600, 1200]) setTimeout(() => { try { sock.send(q, 1900, "239.255.255.250"); } catch { /* closed */ } }, at); });
+      setTimeout(done, ms);
+    });
   }
   /** Whether a webOS TV is listening at this address. An LG that is off, or an LG washer, still answers a ping but not this. */
   async lgAt(ip: string): Promise<boolean> {
