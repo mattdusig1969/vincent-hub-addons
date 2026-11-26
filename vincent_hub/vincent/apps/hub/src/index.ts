@@ -81,7 +81,7 @@ const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
 const ha = new HA();
 const devices = new Devices(ha);
 const media = new Media(ha, devices);
-const cameras = new Cameras(ha, devices);
+const cameras = new Cameras(ha, devices, dataDir);
 const scenes = new Scenes(devices, media);
 /** The home's scenes as they stand now: Everything off is worked out from the devices in the home this minute. */
 const scenesNow = async (): Promise<Scene[]> => { const list = store.scenes(); if (!list.some((x) => x.auto === "off")) return list; const all = await devices.all(); return list.map((x) => (x.auto === "off" ? { ...x, steps: everythingOff(all) } : x)); };

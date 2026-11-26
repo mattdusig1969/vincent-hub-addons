@@ -10,12 +10,20 @@
  * the hub only carries the handshake between the app and Home Assistant.
  */
 import { randomBytes } from "node:crypto";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { HA } from "./ha.ts";
 import type { Devices } from "./devices.ts";
 
 interface Pic { type: string; data: Buffer; at: number }
 export type LiveEvent = { type: "answer"; sdp: string } | { type: "candidate"; candidate: string; sdpMLineIndex: number } | { type: "error"; message: string } | { type: "end" };
 interface Live { entity: string; unsub?: () => void; session?: string; waiting: object[]; sent: LiveEvent[]; listeners: Set<(e: LiveEvent) => void>; cap: NodeJS.Timeout }
+
+/**
+ * Makers whose picture in Home Assistant is a frame from the last recorded event, not one taken now.
+ * Every other camera gives a new picture each time it is asked, so its picture is never old.
+ */
+const EVENT_PICTURES = new Set(["ring"]);
 
 /** No live view runs longer than this: a forgotten one would drain a battery camera. */
 const LIVE_CAP_MS = 10 * 60_000;
@@ -30,18 +38,27 @@ export class Cameras {
   private grabbed = new Map<string, Pic>();
   private lives = new Map<string, Live>();
 
-  constructor(ha: HA, devices: Devices) { this.ha = ha; this.devices = devices; }
+  /** Frames the app took are kept here too, so an update of the hub does not bring back last week's picture. */
+  private dir: string;
+
+  constructor(ha: HA, devices: Devices, dataDir: string) {
+    this.ha = ha; this.devices = devices; this.dir = join(dataDir, "cameras");
+    try {
+      mkdirSync(this.dir, { recursive: true });
+      for (const f of readdirSync(this.dir)) if (f.endsWith(".jpg")) this.grabbed.set(f.slice(0, -4), { type: "image/jpeg", data: readFileSync(join(this.dir, f)), at: statSync(join(this.dir, f)).mtimeMs });
+    } catch { /* no kept pictures: they come back with the first live view */ }
+  }
 
   /** The newest picture of a camera there is: a live frame, Home Assistant's, or the last one that worked. */
   async still(controlId: string): Promise<Pic | undefined> {
-    const { entityId } = await this.devices.camera(controlId);
+    const { entityId, integration } = await this.devices.camera(controlId);
     try {
       const pic = await this.ha.picture(`/api/camera_proxy/${entityId}`);
       if (pic.data.length < 500) throw new Error("empty picture");
       const sig = `${pic.data.length}:${pic.data.subarray(0, 64).toString("hex")}:${pic.data.subarray(-64).toString("hex")}`;
       const before = this.sig.get(entityId);
       // After a restart the picture is of unknown age; only a change seen here has a time.
-      const at = before === undefined ? 0 : before === sig ? this.last.get(entityId)?.at ?? 0 : Date.now();
+      const at = !EVENT_PICTURES.has(integration) ? Date.now() : before === undefined ? 0 : before === sig ? this.last.get(entityId)?.at ?? 0 : Date.now();
       this.sig.set(entityId, sig);
       this.last.set(entityId, { ...pic, at });
     } catch { /* the last good one stands in */ }
@@ -52,13 +69,17 @@ export class Cameras {
   /** When each camera's picture was taken (0 = unknown), by control id. */
   async ages(): Promise<Record<string, number>> {
     const out: Record<string, number> = {};
-    for (const [id, entityId] of await this.devices.cameras()) out[id] = Math.max(this.last.get(entityId)?.at ?? 0, this.grabbed.get(entityId)?.at ?? 0);
+    for (const [id, entityId] of await this.devices.cameras()) {
+      const now = !EVENT_PICTURES.has((await this.devices.camera(id)).integration);
+      out[id] = now ? Date.now() : Math.max(this.last.get(entityId)?.at ?? 0, this.grabbed.get(entityId)?.at ?? 0);
+    }
     return out;
   }
 
   async frame(controlId: string, data: Buffer): Promise<void> {
     const { entityId } = await this.devices.camera(controlId);
     this.grabbed.set(entityId, { type: "image/jpeg", data, at: Date.now() });
+    try { writeFileSync(join(this.dir, `${entityId}.jpg`), data); } catch { /* kept in memory all the same */ }
   }
 
   /** What the app's player needs before it can offer: the relay servers to use. */

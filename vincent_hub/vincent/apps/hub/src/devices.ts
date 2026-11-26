@@ -370,7 +370,7 @@ export class Devices {
     return ref;
   }
 
-  async camera(controlId: string): Promise<{ entityId: string }> {
+  async camera(controlId: string): Promise<{ entityId: string; integration: string }> {
     const snap = await this.snapshot();
     const ref = snap.controls.get(controlId);
     const dev = ref && snap.devices.find((d) => d.id === ref.deviceId);
