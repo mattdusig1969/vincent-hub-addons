@@ -76,6 +76,8 @@ export type Control =
       kind: "media"; state: "playing" | "paused" | "idle" | "off"; title?: string; artist?: string; album?: string; volume?: number;
       /** Address of the cover art on the hub; changes when the art does. */
       art?: string;
+      /** Whether its sound can be switched off and back on, and whether it is off now. */
+      mutes?: boolean; muted?: boolean;
       /** True for a TV or TV box that takes the keys of a remote (arrows, select, back, home). */
       remote?: boolean;
       /** The app on screen, when a TV box says ("YouTube TV"). */
@@ -114,7 +116,7 @@ export type Control =
 
 export type Action =
   | "on" | "off" | "brightness" | "color" | "white"
-  | "play" | "pause" | "volume" | "next" | "previous"
+  | "play" | "pause" | "volume" | "mute" | "next" | "previous"
   | "target" | "low" | "high" | "mode"
   | "lock" | "unlock"
   | "open" | "close"

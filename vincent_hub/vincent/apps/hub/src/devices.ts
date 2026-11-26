@@ -155,10 +155,12 @@ export class Devices {
       const at = integration === "generic" ? /^(\d{1,3})[._](\d{1,3})[._](\d{1,3})[._](\d{1,3})$/.exec(own.trim()) : null;
       const madeBy = integration === "generic" ? (at && this.makerAt?.(at.slice(1).join("."))) || "" : "";
       const plain = integration === "generic" && (at || !own) ? `${madeBy || "Stream"} camera` : "";
+      // A TV that names itself after its model number ("LG webOS TV 65UT8000AUA.BUSDLJM") is "LG TV" to a household.
+      const tv = !d.name_by_user && /\b(webos|bravia|tizen|smart)?\s*tv\b/i.test(own) && /\d{2,}[a-z]|[a-z]\d{3,}/i.test(own) ? `${String(d.manufacturer || "").split(/[ ,]/)[0] || ""} TV`.trim() : "";
       snap.devices.push({
         id: d.id,
-        name: plain || d.name_by_user || d.name || d.model || "Unnamed device",
-        makerName: plain || d.name_by_user || d.name || d.model || "Unnamed device",
+        name: plain || tv || d.name_by_user || d.name || d.model || "Unnamed device",
+        makerName: plain || tv || d.name_by_user || d.name || d.model || "Unnamed device",
         maker: madeBy || (integration === "generic" ? "Camera" : d.manufacturer || titled(integration)),
         model: d.model || "",
         category: best!.category,
@@ -304,6 +306,8 @@ export class Devices {
       case "next": await call("media_next_track"); break;
       case "previous": await call("media_previous_track"); break;
       case "volume": await call("volume_set", { volume_level: clamp(v, 0, 100) / 100 }); break;
+      // Sound off, or back on: the other of what it is now, unless told which.
+      case "mute": await call("volume_mute", { is_volume_muted: req.value === undefined ? !this.ha.states.get(entityId)?.attributes?.is_volume_muted : req.value > 0 }); break;
       case "target": await call("set_temperature", { temperature: v }); break;
       case "low": case "high": {
         // A thermostat keeping a range wants both ends each time; the other end is what it has now.
@@ -460,6 +464,7 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
         source: typeof a.source === "string" ? a.source : undefined, inputs, library: sonos ? "sonos" : "none",
         group: (Array.isArray(a.group_members) && a.group_members.length ? (a.group_members as string[]).map((e) => byEntity.get(e)).filter((x): x is string => !!x) : [id]),
         groups: sonos,
+        ...((Number(a.supported_features ?? 0) & 8) === 8 ? { mutes: true, muted: !!a.is_volume_muted } : {}),
         ...(remote ? { remote: true } : {}), ...(typeof a.app_name === "string" && a.app_name ? { app: a.app_name } : {}),
         ...(stale ? { title: ask!.title, artist: ask!.from, album: undefined, art: undefined } : {}),
       };
