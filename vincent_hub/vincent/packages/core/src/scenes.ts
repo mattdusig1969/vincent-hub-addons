@@ -138,16 +138,16 @@ const sleep: Recipe = (h) => [...h.lights.map(off), ...h.music.map(hush), ...h.c
 export const isScreen = (c: Control): boolean => c.kind === "media" && c.library === "none" && (!!c.remote || c.inputs.length >= 2);
 /** Things plugged into a TV, by how their input is usually named, and what using one is called. */
 const SOURCES: { id: string; test: RegExp; name: string; icon: string }[] = [
-  { id: "appletv", test: /apple ?tv/i, name: "Watch Apple TV", icon: "film" },
-  { id: "playstation", test: /playstation|\bps ?[345]\b/i, name: "Play PlayStation", icon: "star" },
-  { id: "xbox", test: /xbox/i, name: "Play Xbox", icon: "star" },
-  { id: "nintendo", test: /nintendo|\bswitch\b/i, name: "Play Nintendo", icon: "star" },
-  { id: "roku", test: /roku/i, name: "Watch Roku", icon: "film" },
-  { id: "firetv", test: /fire ?(tv|stick)/i, name: "Watch Fire TV", icon: "film" },
-  { id: "chromecast", test: /chromecast|google tv/i, name: "Watch Google TV", icon: "film" },
-  { id: "cable", test: /cable|satellite|set.?top|directv|xfinity|spectrum|\bdish\b/i, name: "Watch cable", icon: "film" },
-  { id: "console", test: /game|console/i, name: "Play games", icon: "star" },
-  { id: "disc", test: /blu.?ray|\bdvd\b/i, name: "Watch a disc", icon: "film" },
+  { id: "appletv", test: /apple ?tv/i, name: "Watch Apple TV", icon: "tv" },
+  { id: "playstation", test: /playstation|\bps ?[345]\b/i, name: "Play PlayStation", icon: "game" },
+  { id: "xbox", test: /xbox/i, name: "Play Xbox", icon: "game" },
+  { id: "nintendo", test: /nintendo|\bswitch\b/i, name: "Play Nintendo", icon: "game" },
+  { id: "roku", test: /roku/i, name: "Watch Roku", icon: "tv" },
+  { id: "firetv", test: /fire ?(tv|stick)/i, name: "Watch Fire TV", icon: "tv" },
+  { id: "chromecast", test: /chromecast|google tv/i, name: "Watch Google TV", icon: "tv" },
+  { id: "cable", test: /cable|satellite|set.?top|directv|xfinity|spectrum|\bdish\b/i, name: "Watch cable", icon: "tv" },
+  { id: "console", test: /game|console/i, name: "Play games", icon: "game" },
+  { id: "disc", test: /blu.?ray|\bdvd\b/i, name: "Watch a disc", icon: "tv" },
 ];
 /** A box that plugs into a TV (it shows apps, not HDMI inputs), by what its maker calls it. */
 const isBox = (p: Part) => /apple ?tv|roku|fire ?tv|chromecast|shield|playstation|xbox/i.test(`${p.d.model} ${p.d.makerName}`);
@@ -380,6 +380,11 @@ export const SCENE_ICONS: Record<string, string> = {
   leaf: "M5 19c0-8 5-13 14-14 0 9-5 14-13 14zM5 19l7-7",
   star: "M12 3l2.700 5.600 6.100.800-4.500 4.300 1.100 6.100L12 16.900 6.600 19.800l1.100-6.100L3.200 9.400l6.100-.800z",
   drop: "M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z",
+  tv: "M3 5h18v12H3zM8 21h8M12 17v4",
+  game: "M7 8h10a5 5 0 0 1 4.900 4l.900 4.500a2 2 0 0 1-3.500 1.600L17.500 16h-11l-1.800 2.100a2 2 0 0 1-3.500-1.600L2.100 12A5 5 0 0 1 7 8zM7.500 10.500v3M6 12h3M15.500 11h.010M17.500 13h.010",
+  play: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 8.500v7l6-3.500z",
+  trophy: "M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8.500 20h7M10 17h4",
+  music: "M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
   spark: "M12 3v6M12 15v6M3 12h6M15 12h6M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3",
 };
 
