@@ -83,7 +83,7 @@ const plain = (s: string, vars: Record<string, unknown> = {}) =>
     .replace(/Home Assistant/g, "Vincent").replace(/\bSubmit\b/g, "Continue").replace(/\b[Tt]he host\b/g, "the address").replace(/\bIP address\b/g, "address").replace(/\n{2,}/g, "\n").trim();
 const titled = (s: string) => s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 
-interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string; step?: string; look?: boolean; link?: boolean; hassUrl?: string; prepare?: boolean; nested?: Record<string, Record<string, unknown>> }
+interface Open { domain: string; rooms: string[]; fields: StepField[]; menu: boolean; tips?: string; name?: string; step?: string; look?: boolean; /** Our words for a search that found nothing, kept while the question keeps coming back. */ said?: Step; link?: boolean; hassUrl?: string; prepare?: boolean; nested?: Record<string, Record<string, unknown>> }
 
 /** Something a brand needs on the hub before its sign-in can start (Echo: a part fetched once). */
 export interface Preparer { has(): Promise<boolean>; prepare(): void; state: string; message: string }
@@ -145,10 +145,27 @@ export class Flows {
     }
     return this.begin(b.driver, rooms, b.tips, b.name, hassUrl);
   }
-  private async begin(driver: string, rooms: string[], tips?: string, name?: string, hassUrl?: string): Promise<Step> {
+  private async begin(driver: string, rooms: string[], tips?: string, name?: string, hassUrl?: string, searched = false): Promise<Step> {
     const r = await this.ha.restRaw("POST", "/config/config_entries/flow", { handler: driver, show_advanced_options: false });
     let step = await this.read(r.body, driver, rooms, undefined, tips, name);
     if (step.flow && hassUrl) { const o = this.open.get(step.flow); if (o) o.hassUrl = hassUrl; }
+    // The maker offers to search when the address is left empty. Then the search is simply done: nobody is shown an empty box to skip.
+    const canSearch = step.kind === "form" && step.flow && step.fields.some((f) => f.name === "host" && !f.required) && step.fields.every((f) => !f.required);
+    if (canSearch && !searched) {
+      const next = await this.answer(step.flow!, {});
+      const again = next.kind === "form" && next.fields.some((f) => f.name === "host");
+      if (next.kind !== "stopped" && !again) return next;
+      // Nothing found. The question comes back, saying so, with the address as the way out.
+      if (again && next.flow) await this.cancel(next.flow);
+      const back = await this.begin(driver, rooms, tips, name, hassUrl, true);
+      if (back.kind !== "form" || !back.flow) return back;
+      const what = name ?? "it";
+      const fields = back.fields.map((f) => (f.name === "host" ? { ...f, label: "Its address, only if the search keeps finding nothing", help: "Leave this empty to search again. The device shows its address in its own network settings: four numbers with dots, like 192.168.1.42." } : f));
+      const told: Step = { ...back, title: name ?? back.title, text: `Vincent searched your home network for ${what} and found nothing. Check it is switched on and on the same network as your hub, then tap Continue to search again.`, fields };
+      const o = this.open.get(back.flow); if (o) { o.fields = fields; o.said = told; } this.last.set(back.flow, told);
+      return told;
+    }
+    if (canSearch) return step;
     // The maker asks for the device's address first. Nobody knows that by heart: the hub looks for it instead.
     const asksHost = step.kind === "form" && step.flow && step.fields.some((f) => f.name === "host") && step.fields.every((f) => f.name === "host" || !f.required);
     if (asksHost && this.hostsFor) {
@@ -221,7 +238,15 @@ export class Flows {
       const bad = (r.body?.errors ?? {}) as Record<string, string>;
       return { ...this.last.get(flowId)!, errors: Object.fromEntries(Object.entries(bad).map(([k, v]) => [k, titled(String(v))])), message: r.body?.message ? plain(String(r.body.message)) : undefined };
     }
-    return this.read(r.body, o.domain, o.rooms, flowId, o.tips);
+    const next = await this.read(r.body, o.domain, o.rooms, flowId, o.tips);
+    // Searched again and still nothing: the same plain words, not the maker's.
+    if (o.said && next.kind === "form" && next.flow && next.fields.some((f) => f.name === "host")) {
+      const kept: Step = { ...o.said, flow: next.flow, errors: { host: "Still nothing found." } };
+      const now = this.open.get(next.flow); if (now) { now.fields = kept.fields; now.said = o.said; }
+      this.last.set(next.flow, kept);
+      return kept;
+    }
+    return next;
   }
 
   /** For a step that is waiting on the device itself (a button press, a search): ask again. */
