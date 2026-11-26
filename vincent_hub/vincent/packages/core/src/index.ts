@@ -329,6 +329,8 @@ export interface Step {
   kind: "form" | "wait" | "done" | "stopped" | "link";
   /** With `wait`: what is going on, in a word ("Installing…"). */
   doing?: string;
+  /** A picture that shows where to look in the maker's own app, by its path among the app's own files ("help/tuya-scan.jpg"). */
+  picture?: string;
   /** With `link`: the page to open. */
   url?: string;
   /** Names the setup under way, for the next answer. Absent once it has ended. */

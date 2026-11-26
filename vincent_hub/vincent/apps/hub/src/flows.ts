@@ -52,10 +52,10 @@ const TUYA_WHY: Record<string, string> = {
   scan: "The Smart Life app has not approved it yet, or the code ran out. Scan the new code below and confirm in the app, then tap Continue.",
 };
 /** Where a maker's own words for a whole step leave people guessing, ours: by driver, then by the step. */
-const STEPS: Record<string, Record<string, { title: string; text: string }>> = {
+const STEPS: Record<string, Record<string, { title: string; text: string; picture?: string }>> = {
   tuya: {
-    user: { title: "Your Tuya or Smart Life account", text: "Vincent uses the account you already have, with everything already set up in it. Open the Smart Life or Tuya Smart app on your phone, tap Me, then the gear at the top right, then Account and Security. Your User Code is at the bottom of that page." },
-    scan: { title: "Approve it in the Smart Life app", text: "Open the Smart Life or Tuya Smart app and tap the scan button at the top right of its first page. Point it at this code and confirm. If the app is on this same phone, take a screenshot of this page first, then in the app's scanner choose the picture from your photos. Come back here and tap Continue." },
+    user: { title: "Your Tuya or Smart Life account", text: "Vincent uses the account you already have, with everything already set up in it. Open the Smart Life or Tuya Smart app on your phone and tap Me at the bottom right. Tap the settings button at the top right, then Account and Security. Your User Code is at the bottom of that page." },
+    scan: { title: "Approve it in the Smart Life app", picture: "help/tuya-scan.jpg", text: "Open the Smart Life or Tuya Smart app and tap Me at the bottom right. The scan button is at the top right, next to the settings button, as circled in the picture. Point it at the code below and confirm. If the app is on this same phone, take a screenshot of this page first, then in the app's scanner choose the picture from your photos. Come back here and tap Continue." },
   },
 };
 /** Questions a household cannot answer and need not: left out, the maker's default stands. */
@@ -280,7 +280,7 @@ export class Flows {
         this.open.set(id!, { domain, rooms, fields, menu: false, tips, name, step: String(r.step_id ?? ""), hassUrl: this.open.get(id!)?.hassUrl, nested });
         const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's sign-in opens next. You type your email and password there, and a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
         const ours = STEPS[domain]?.[String(r.step_id)];
-        if (ours) { step.title = ours.title; step.text = ours.text; }
+        if (ours) { step.title = ours.title; step.text = ours.text; step.picture = ours.picture; }
         this.last.set(id!, step);
         return step;
       }
