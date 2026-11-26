@@ -673,7 +673,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return;
   }
   if (m === "GET" && path === "/api/brands") return json(res, 200, { brands: brandList() });
-  if (m === "GET" && path === "/api/seen") return json(res, 200, { seen: await network.seen().catch(() => []) });
+  if (m === "GET" && path === "/api/seen") return json(res, 200, { seen: await network.seen(new URL(req.url ?? "/", "http://hub").searchParams.get("fresh") === "1").catch(() => []) });
   if (m === "GET" && path === "/api/software") return json(res, 200, await software());
   const photo = /^\/api\/rooms\/([a-f0-9]+)\/photo$/.exec(path);
   if (m === "GET" && photo) {

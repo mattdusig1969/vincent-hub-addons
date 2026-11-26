@@ -96,7 +96,9 @@ export class Network {
   }
 
   /** Makers seen on the network that the home has not added yet. Never waits long: an old answer is given while a new look runs. */
-  async seen(): Promise<Seen[]> {
+  async seen(fresh = false): Promise<Seen[]> {
+    // Asked to look again: a new look starts now (at most one every 20 seconds), and the last answer is given meanwhile.
+    if (fresh && this.at && Date.now() - this.at > 20_000) this.at = 1;
     if (Date.now() - this.at > KEEP_MS) {
       const look = this.look().catch(() => undefined);
       if (!this.at) await Promise.race([look, new Promise((r) => setTimeout(r, 12_000))]);
