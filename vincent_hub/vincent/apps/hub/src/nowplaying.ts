@@ -52,7 +52,10 @@ export class NowPlaying {
   private recent: { at: string; phone: string; event: string; status: number; reason?: string }[] = [];
   private busy = false;
 
-  constructor(private house: () => Promise<{ devices: Device[]; rooms: Room[]; phones: string[] }>) {
+  private house: () => Promise<{ devices: Device[]; rooms: Room[]; phones: string[] }>;
+
+  constructor(house: () => Promise<{ devices: Device[]; rooms: Room[]; phones: string[] }>) {
+    this.house = house;
     try { if (existsSync(this.file)) this.regs = JSON.parse(readFileSync(this.file, "utf8")).phones ?? {}; } catch { /* start empty */ }
     setInterval(() => {
       if (this.busy) return;
