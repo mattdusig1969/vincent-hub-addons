@@ -458,7 +458,7 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
       const stale = !!ask && st === "playing" && Date.now() - ask.at < 30 * 60_000 && String(a.media_title ?? "") === ask.was;
       if (ask && !stale && (Date.now() - ask.at > 15_000 || String(a.media_title ?? "") !== ask.was)) asked.delete(s!.entity_id);
       return {
-        ...base, kind: "media", state: st, title: a.media_title, artist: a.media_artist, album: a.media_album_name,
+        ...base, kind: "media", state: st, title: said(a.media_title), artist: said(a.media_artist), album: said(a.media_album_name),
         volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined,
         art: a.entity_picture ? `/api/art/${id}?v=${hash(String(a.entity_picture))}` : undefined,
         source: typeof a.source === "string" ? a.source : undefined, inputs, library: sonos ? "sonos" : "none",
@@ -496,3 +496,5 @@ function tint(req: ControlRequest): Record<string, unknown> {
   if (typeof req.rgb === "number" && req.rgb >= 0 && req.rgb <= 0xffffff) return { rgb_color: [req.rgb >> 16, (req.rgb >> 8) & 255, req.rgb & 255] };
   return {};
 }
+/** What a player says of its song. Some send the word "undefined" or "None" where they have nothing to say. */
+function said(v: unknown): string | undefined { const t = typeof v === "string" ? v.trim() : ""; return t && !/^(undefined|null|none)$/i.test(t) ? t : undefined; }

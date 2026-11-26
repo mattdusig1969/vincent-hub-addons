@@ -40,6 +40,7 @@
  *   POST /api/adding {brand, rooms}  start adding one -> a Step; POST /api/adding/:flow/answer|poll|cancel
  *   POST /api/matter {code}          add a device by its Matter code
  *   POST /api/place {items}          several devices at once: add each to its rooms, or leave it out
+ *   POST /api/nowplaying             {kind, token, activity} an iPhone's Lock Screen card; GET how it is going
  *   GET  /api/events                 server-sent "changed" whenever the app should re-read
  *   GET  /api/intercom/listen?room=  this screen's line for announcements and calls; POST /api/intercom/announce, /call, /call/:id/answer|signal|end; GET /api/intercom/clip/:id
  *
@@ -73,6 +74,7 @@ import { MatterKeeper } from "./matter.ts";
 import { changes } from "./changes.ts";
 import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
+import { NowPlaying } from "./nowplaying.ts";
 import type { Device, Repeat, Scene } from "../../../packages/core/src/index.ts";
 import { dayKey, whenDue, whenWords, everythingOff, cleanSays, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
 import { THEMES, CUSTOM_THEME, cleanPalette, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
@@ -92,6 +94,8 @@ const scenesNow = async (): Promise<Scene[]> => { const list = store.scenes(); i
 const intercom = new Intercom((id) => store.rooms().find((r) => r.id === id)?.name ?? "");
 const place = new Place(ha);
 const lists = new Lists(ha);
+// "Now playing" on each iPhone's Lock Screen.
+const nowPlaying = new NowPlaying(async () => ({ devices: await devices.all(), rooms: store.rooms(), phones: store.phones().map((p) => p.id) }));
 const apple = new Apple(lists);
 const repeatOf = (v: unknown): Repeat => (["day", "weekdays", "week", "month", "year"].includes(String(v)) ? (String(v) as Repeat) : "");
 const portraits = new Portraits(dataDir, fileURLToPath(new URL("../../app/dist", import.meta.url)), () => changed());
@@ -446,6 +450,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (m === "POST" && path === "/api/wake/forget") { store.clearWake(); console.log(`[wake] ${me.name} cleared what the home had learned`); devices.invalidate(); changed(); return json(res, 200, { ok: true }); }
   if (m === "POST" && path === "/api/wake") { const b = await body(req); console.log(`[wake] ${me.name}: "hey ${String(b.who ?? "").slice(0, 20)}"${b.said ? ` then "${String(b.said).slice(0, 80)}"` : ""}`); return json(res, 200, { ok: true }); }
   // Starred music: kept on the hub so a person's phone and tablet show the same list.
+  // The Lock Screen card: the phone hands over what Apple needs to reach it; GET says how it is going.
+  if (path === "/api/nowplaying") return m === "POST" ? json(res, 200, { ok: nowPlaying.register(me.id, await body(req)) }) : json(res, 200, nowPlaying.status());
   if (path === "/api/stars") {
     if (m === "POST") {
       const b = await body(req);
@@ -489,7 +495,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       house: async () => ({ devices: await devices.all(), rooms: store.rooms(), scenes: await scenesNow(), weather: place.weather(), lists: lists.all(), timers: store.timers(me.id), homeName: store.homeName, timeZone: store.place?.timeZone ?? ha.timeZone ?? "" }),
       control: (r) => devices.control(r),
       runScene: async (scene, allowed) => { const all = await devices.all(), kind = (id: string) => all.flatMap((d) => d.controls).find((c) => c.id === id)?.kind ?? ""; return scenes.run(scene.steps.filter((st) => allowed(kind(st.id)))); },
-      music: (speaker, query, from) => media.playByName(speaker, query, { from, stars: (store.starsOf(key) ?? []) as any }),
+      music: (speaker, query, from) => { nowPlaying.note(me.id, speaker); return media.playByName(speaker, query, { from, stars: (store.starsOf(key) ?? []) as any }); },
       setTimer: (seconds, name) => store.addTimer({ seconds, name, by: me.person || me.name, made: me.id }),
       stopTimer: (id) => { store.removeTimer(id); },
       remind: (text, at, repeat) => { store.addReminder({ text, at: at.toISOString(), repeat: repeatOf(repeat), for: "", by: me.person || me.name, made: me.id }); say(`Set the reminder "${text.slice(0, 60)}" by asking the host`); },
@@ -582,6 +588,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const no = at ? barred(at.c.kind) : "";
     if (no) return json(res, 403, { code: "rule", error: no });
     await devices.control(b);
+    if (at?.c.kind === "media" && b.action !== "key") nowPlaying.note(me.id, at.c.id);
     // A press on the remote is not written down: a film takes a hundred of them.
     if (at && b.action !== "key") say(controlWords(at.c.name === at.d.name || at.d.controls.length === 1 ? at.d.name : `${at.d.name} ${at.c.name}`, at.c.kind, String(b.action), b.value, CLIMATE_MODES.find((x) => x.id === b.mode)?.name ?? b.mode), ruleFor(at.c.kind) ?? "settings");
     return json(res, 200, { ok: true });
@@ -591,7 +598,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   if (med && m === "POST" && med[2] === "group") { await media.group(med[1], (await body(req)).members); return json(res, 200, { ok: true }); }
   if (med && m === "GET" && med[2] === "siriusxm") return json(res, 200, { groups: await media.siriusxm(med[1]) });
   if (med && m === "GET" && med[2] === "sources") return json(res, 200, await media.sources(med[1]));
-  if (med && m === "POST" && med[2] === "play") { const b = await body(req); await media.play(med[1], b); const at = await controlOf(med[1]); say(`Played ${String(b.title ?? "something").slice(0, 60)} on ${at?.d.name ?? "a speaker"}`, "media"); return json(res, 200, { ok: true }); }
+  if (med && m === "POST" && med[2] === "play") { const b = await body(req); await media.play(med[1], b); nowPlaying.note(me.id, med[1]); const at = await controlOf(med[1]); say(`Played ${String(b.title ?? "something").slice(0, 60)} on ${at?.d.name ?? "a speaker"}`, "media"); return json(res, 200, { ok: true }); }
   // Timers: set by asking the host, or here; stopped from any screen.
   if (m === "POST" && path === "/api/timers") {
     const b = await body(req);
