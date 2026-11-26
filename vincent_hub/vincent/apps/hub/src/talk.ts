@@ -110,7 +110,7 @@ function houseNow(h: TalkHouse): { text: string; handles: Map<string, { d: Devic
     `Rooms: ${h.rooms.map((r) => r.name).join(", ") || "none yet"}.`,
     "Devices (handle, name, kind, room: state):",
     ...(lines.length ? lines : ["(none added yet)"]),
-    `Scenes that can be run: ${h.scenes.map((s) => `"${s.name}"${s.room ? ` (${h.rooms.find((r) => r.id === s.room)?.name ?? "a room"})` : " (whole home)"}`).join(", ") || "none"}.`,
+    `Scenes that can be run: ${h.scenes.map((s) => `"${s.name}"${s.room ? ` (${h.rooms.find((r) => r.id === s.room)?.name ?? "a room"})` : " (whole home)"}${s.says?.length ? ` [the household also asks for it by saying: ${s.says.map((x) => `"${x}"`).join(" or ")}]` : ""}`).join(", ") || "none"}. When someone says a scene's name or one of its phrases, or something that plainly means the same, run that scene with run_scene rather than switching devices one by one.`,
     `Timers: ${h.timers.map((t) => { const left = (Date.parse(t.ends) - Date.now()) / 1000; return `${t.name ? `"${t.name}"` : `the ${timerWords(t.seconds)} timer`}${left > 0 ? `, ${timerWords(left)} left` : ", finished and RINGING"}`; }).join("; ") || "none running"}.`,
     `Lists: ${h.lists.map((l) => `${l.name} (${l.open} to do)`).join(", ") || "none"}.`,
   ].join("\n");

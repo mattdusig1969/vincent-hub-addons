@@ -74,7 +74,7 @@ import { changes } from "./changes.ts";
 import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
 import type { Repeat, Scene } from "../../../packages/core/src/index.ts";
-import { dayKey, whenDue, whenWords, everythingOff, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
+import { dayKey, whenDue, whenWords, everythingOff, cleanSays, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
 import { THEMES, CUSTOM_THEME, cleanPalette, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
 
 const PORT = Number(process.env.VINCENT_HUB_PORT ?? 8870);
@@ -527,7 +527,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (room && !store.rooms().some((r) => r.id === room)) return json(res, 404, { error: "That room is gone." });
     const steps = cleanSteps(b.steps);
     if (!steps.length) return json(res, 400, { error: "A scene needs at least one thing to set." });
-    const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps, when: cleanWhen(b.when) });
+    const id = store.saveScene({ id: b.id ? String(b.id) : undefined, name: String(b.name ?? ""), room, icon: sceneIcon(b.icon), steps, when: cleanWhen(b.when), says: cleanSays(b.says) });
     if (!id) return json(res, 404, { error: "That scene is gone." });
     { const sc = store.scenes().find((x) => x.id === id)!; say(`${b.id ? "Changed" : "Made"} the scene "${sc.name}" for ${roomWord(sc.room)}${sc.when?.on ? `. It runs by itself: ${whenWords(sc.when)}` : ""}`); }
     // A schedule set for a moment that has only just passed starts tomorrow; it does not fire the instant it is saved.

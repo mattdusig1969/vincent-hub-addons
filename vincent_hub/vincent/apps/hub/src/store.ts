@@ -264,9 +264,9 @@ export const store = {
   },
   get scenesRefused(): string[] { return saved.scenesRefused ?? []; },
   /** Saves a new scene (no id) or changes one. Returns its id, or "" when the one to change is gone. */
-  saveScene(sc: { id?: string; name: string; room: string; icon: string; steps: ControlRequest[]; when?: SceneWhen }): string {
+  saveScene(sc: { id?: string; name: string; room: string; icon: string; steps: ControlRequest[]; when?: SceneWhen; says?: string[] }): string {
     const list = (saved.scenes ??= []);
-    const clean = { name: sc.name.trim().slice(0, 30) || "Scene", room: sc.room, icon: sc.icon, steps: sc.steps, ...(sc.when ? { when: sc.when } : {}) };
+    const clean = { name: sc.name.trim().slice(0, 30) || "Scene", room: sc.room, icon: sc.icon, steps: sc.steps, ...(sc.when ? { when: sc.when } : {}), ...(sc.says?.length ? { says: sc.says } : {}) };
     if (sc.id) {
       const at = list.findIndex((x) => x.id === sc.id);
       if (at < 0) return "";

@@ -21,10 +21,15 @@ export interface Scene {
   steps: ControlRequest[];
   /** When it runs by itself, if it does. */
   when?: SceneWhen;
+  /** What the household says to a host to run it, beyond its name: "load up PlayStation". */
+  says?: string[];
   /** "off" = the home's own Everything off: its steps are worked out afresh each time, so lights and speakers added later are included. */
   auto?: "off";
 }
 
+/** What was typed as the things to say, tidied: a few short phrases. */
+export const cleanSays = (v: unknown): string[] =>
+  (Array.isArray(v) ? v : String(v ?? "").split(/[,\n]/)).map((x) => String(x).replace(/["“”]/g, "").replace(/^\s*(hey|ok|okay)\s+\w+\s+/i, "").trim().slice(0, 60)).filter((x) => x && !/^(hey|ok|okay)\s+\w+$/i.test(x)).slice(0, 4);
 /** A scene's schedule: a time of day, or the sun, on chosen days. */
 export interface SceneWhen {
   on: boolean;
