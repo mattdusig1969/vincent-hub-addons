@@ -74,6 +74,8 @@ export type Control =
   | (ControlBase & { kind: "switch"; on: boolean })
   | (ControlBase & {
       kind: "media"; state: "playing" | "paused" | "idle" | "off"; title?: string; artist?: string; album?: string; volume?: number;
+      /** True when its sound can only be turned up or down a step at a time (a TV whose sound comes from a soundbar): there is no level to show or set. */
+      volumeSteps?: boolean;
       /** Address of the cover art on the hub; changes when the art does. */
       art?: string;
       /** Whether its sound can be switched off and back on, and whether it is off now. */
@@ -116,7 +118,7 @@ export type Control =
 
 export type Action =
   | "on" | "off" | "brightness" | "color" | "white"
-  | "play" | "pause" | "volume" | "mute" | "next" | "previous"
+  | "play" | "pause" | "volume" | "louder" | "quieter" | "mute" | "next" | "previous"
   | "target" | "low" | "high" | "mode"
   | "lock" | "unlock"
   | "open" | "close"

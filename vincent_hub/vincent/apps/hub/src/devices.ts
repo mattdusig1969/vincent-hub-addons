@@ -305,7 +305,16 @@ export class Devices {
       case "pause": await call("media_pause"); break;
       case "next": await call("media_next_track"); break;
       case "previous": await call("media_previous_track"); break;
-      case "volume": await call("volume_set", { volume_level: clamp(v, 0, 100) / 100 }); break;
+      case "volume": {
+        // Asked for a level it cannot be set to (a scene, the host): it is stepped that way instead, a step for every five points.
+        const at = this.ha.states.get(entityId)?.attributes ?? {};
+        if (!stepsOnly(at)) { await call("volume_set", { volume_level: clamp(v, 0, 100) / 100 }); break; }
+        const from = typeof at.volume_level === "number" ? Math.round(at.volume_level * 100) : 50, to = clamp(v, 0, 100);
+        for (let i = Math.min(8, Math.ceil(Math.abs(to - from) / 5)); i > 0; i--) await call(to > from ? "volume_up" : "volume_down");
+        break;
+      }
+      case "louder": await call("volume_up"); break;
+      case "quieter": await call("volume_down"); break;
       // Sound off, or back on: the other of what it is now, unless told which.
       case "mute": await call("volume_mute", { is_volume_muted: req.value === undefined ? !this.ha.states.get(entityId)?.attributes?.is_volume_muted : req.value > 0 }); break;
       case "target": await call("set_temperature", { temperature: v }); break;
@@ -459,7 +468,8 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
       if (ask && !stale && (Date.now() - ask.at > 15_000 || String(a.media_title ?? "") !== ask.was)) asked.delete(s!.entity_id);
       return {
         ...base, kind: "media", state: st, title: said(a.media_title), artist: said(a.media_artist), album: said(a.media_album_name),
-        volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined,
+        // A TV playing through a soundbar or receiver cannot be set to a level, only stepped up and down: the level it reports is not the one heard.
+        ...(stepsOnly(a) ? { volumeSteps: true } : { volume: typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : undefined }),
         art: a.entity_picture ? `/api/art/${id}?v=${hash(String(a.entity_picture))}` : undefined,
         source: typeof a.source === "string" ? a.source : undefined, inputs, library: sonos ? "sonos" : "none",
         group: (Array.isArray(a.group_members) && a.group_members.length ? (a.group_members as string[]).map((e) => byEntity.get(e)).filter((x): x is string => !!x) : [id]),
@@ -498,3 +508,5 @@ function tint(req: ControlRequest): Record<string, unknown> {
 }
 /** What a player says of its song. Some send the word "undefined" or "None" where they have nothing to say. */
 function said(v: unknown): string | undefined { const t = typeof v === "string" ? v.trim() : ""; return t && !/^(undefined|null|none)$/i.test(t) ? t : undefined; }
+/** Its volume takes steps but not a level (Home Assistant's feature bits: 4 = set a level, 1024 = step). */
+function stepsOnly(a: Record<string, unknown>): boolean { const f = Number(a.supported_features ?? 0); return (f & 4) === 0 && (f & 1024) === 1024; }
