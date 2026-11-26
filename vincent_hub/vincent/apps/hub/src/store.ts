@@ -16,6 +16,8 @@ export interface AppleRow { /** Apple's id; "" while the phone has yet to make i
 export interface AppleSaved { lists: Record<string, { name: string; /** Shared with the home, or this device's own reminders only. */ share: boolean; entity?: string }>; /** The Apple list that reminders made on this device are copied to. */ into: string; rows: AppleRow[]; at?: string }
 
 interface Saved {
+  /** How to wake each TV that wakes by its hardware address, by the setup that brought it. */
+  tvMacs?: Record<string, string>;
   /** Apple Reminders, by the phone or tablet that set it up. */
   apple?: Record<string, AppleSaved>;
   /** How each host's name is written down when the people of this home say it ("hey vinsen"), learned on any device and used by all of them. */
@@ -341,6 +343,8 @@ export const store = {
   get allReminders(): Reminder[] { return saved.reminders ?? []; },
   setReminders(all: Reminder[]): void { saved.reminders = all.slice(-600); save(); },
   appleOf(deviceId: string): AppleSaved | undefined { const a = saved.apple?.[deviceId]; return a && { ...a, lists: { ...a.lists }, rows: a.rows.map((r) => ({ ...r })) }; },
+  tvMac(entry: string): string | undefined { return saved.tvMacs?.[entry]; },
+  setTvMac(entry: string, mac: string): void { saved.tvMacs = { ...saved.tvMacs, [entry]: mac }; save(); },
   wakeTaught(): Record<string, string[]> { return Object.fromEntries(Object.entries(saved.wake ?? {}).map(([k, v]) => [k, [...v]])); },
   /** Adds what a device learned: newest first, twelve ways a host at most (room for several people). True when anything was new. */
   addWake(add: Record<string, string[]>): boolean {

@@ -132,6 +132,47 @@ const night: Recipe = (h) => {
 const morning: Recipe = (h) => [...h.lights.map((p) => on(p, 70, MORNING)), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "open" }))];
 const sleep: Recipe = (h) => [...h.lights.map(off), ...h.music.map(hush), ...h.covers.map((p): ControlRequest => ({ id: p.c.id, action: "close" }))];
 
+// Televisions
+
+/** A television or a TV box, as against a music speaker. */
+export const isScreen = (c: Control): boolean => c.kind === "media" && c.library === "none" && (!!c.remote || c.inputs.length >= 2);
+/** Things plugged into a TV, by how their input is usually named, and what using one is called. */
+const SOURCES: { id: string; test: RegExp; name: string; icon: string }[] = [
+  { id: "appletv", test: /apple ?tv/i, name: "Watch Apple TV", icon: "film" },
+  { id: "playstation", test: /playstation|\bps ?[345]\b/i, name: "Play PlayStation", icon: "star" },
+  { id: "xbox", test: /xbox/i, name: "Play Xbox", icon: "star" },
+  { id: "nintendo", test: /nintendo|\bswitch\b/i, name: "Play Nintendo", icon: "star" },
+  { id: "roku", test: /roku/i, name: "Watch Roku", icon: "film" },
+  { id: "firetv", test: /fire ?(tv|stick)/i, name: "Watch Fire TV", icon: "film" },
+  { id: "chromecast", test: /chromecast|google tv/i, name: "Watch Google TV", icon: "film" },
+  { id: "cable", test: /cable|satellite|set.?top|directv|xfinity|spectrum|\bdish\b/i, name: "Watch cable", icon: "film" },
+  { id: "console", test: /game|console/i, name: "Play games", icon: "star" },
+  { id: "disc", test: /blu.?ray|\bdvd\b/i, name: "Watch a disc", icon: "film" },
+];
+/** A box that plugs into a TV (it shows apps, not HDMI inputs), by what its maker calls it. */
+const isBox = (p: Part) => /apple ?tv|roku|fire ?tv|chromecast|shield|playstation|xbox/i.test(`${p.d.model} ${p.d.makerName}`);
+
+/**
+ * "Watch Apple TV", "Play PlayStation", "TV off": one tap brings up the TV on the right input, with the box that feeds it.
+ * The hub switches each thing on first and waits for it before asking for the input.
+ */
+function watching(parts: Part[]): { id: string; name: string; icon: string; steps: ControlRequest[] }[] {
+  const screens = parts.filter((p) => isScreen(p.c));
+  if (!screens.length) return [];
+  const boxes = screens.filter(isBox), tvs = screens.filter((p) => !isBox(p));
+  const out: { id: string; name: string; icon: string; steps: ControlRequest[] }[] = [];
+  const input = (p: Part, name: string): ControlRequest => ({ id: p.c.id, action: "play", item: { kind: "input", id: name, title: name } });
+  for (const src of SOURCES) {
+    if (out.length >= 3) break;
+    const box = boxes.find((b) => src.test.test(`${b.d.model} ${b.d.makerName} ${b.d.name}`));
+    const tv = tvs.map((p) => ({ p, name: (p.c as Extract<Control, { kind: "media" }>).inputs.find((i) => src.test.test(i)) })).find((x) => x.name);
+    const steps: ControlRequest[] = [...(tv ? [input(tv.p, tv.name!)] : []), ...(box ? [{ id: box.c.id, action: "on" } as ControlRequest] : [])];
+    if (steps.length) out.push({ id: `watch-${src.id}`, name: src.name, icon: src.icon, steps });
+  }
+  if (out.length) out.push({ id: "tvoff", name: "TV off", icon: "off", steps: screens.map(off) });
+  return out;
+}
+
 interface Template { id: string; name: string; icon: string; make: Recipe }
 const T = (id: string, name: string, icon: string, make: Recipe): Template => ({ id, name, icon, make });
 const BRIGHT = T("bright", "Bright", "sun", bright), ALL_OFF = T("off", "All off", "off", allOff), MOVIE = T("movie", "Movie night", "film", movie);
@@ -181,7 +222,13 @@ export function sceneIdeas(room: string, rooms: Room[], devices: Device[], scene
   if (room !== WHOLE_HOME) {
     const r = rooms.find((x) => x.id === room);
     if (!r) return [];
-    const h = has(partsOf(devices, room));
+    const parts = partsOf(devices, room);
+    // A room with a TV: what to watch comes first, and does not use up the room's other ideas.
+    const watch = watching(parts), others = most;
+    most += watch.length;
+    for (const w of watch) offer(w.id, w.name, w.icon, w.steps);
+    most = others + out.length;
+    const h = has(parts);
     for (const t of TEMPLATES[roomKind(r)]) offer(t.id, t.name, t.icon, t.make(h));
     return out;
   }
@@ -223,7 +270,8 @@ export function stepWords(step: ControlRequest, devices: Device[]): string {
     case "on": return `${name} on`;
     case "brightness": { const tint = tintName(step); return `${name} at ${step.value}%${tint ? `, ${tint.toLowerCase()}` : ""}`; }
     case "pause": return `${name}: music stops`;
-    case "play": return step.item ? `${name} plays ${step.item.title}${step.value !== undefined ? ` at ${step.value}%` : ""}` : `${name} plays`;
+    case "play": if (step.item?.kind === "input" && p.c.kind === "media" && p.c.library === "none") return `${name} switches to ${step.item.title}`;
+      return step.item ? `${name} plays ${step.item.title}${step.value !== undefined ? ` at ${step.value}%` : ""}` : `${name} plays`;
     case "open": return `${name} open`;
     case "close": return `${name} closed`;
     case "target": return `${name} to ${step.value}°`;
@@ -254,7 +302,11 @@ export function sceneWords(steps: ControlRequest[], devices: Device[]): string[]
 export function stepHolds(step: ControlRequest, c: Control): boolean {
   switch (c.kind) {
     case "light": return step.action === "off" ? !c.on : step.action === "on" ? c.on : step.action === "brightness" ? c.on && Math.abs(c.brightness - (step.value ?? 0)) <= 3 && tintHolds(step, c) : false;
-    case "media": return step.action === "pause" ? c.state !== "playing" : step.action === "play" ? c.state === "playing" : false;
+    case "media":
+      if (step.action === "on") return c.state !== "off";
+      if (step.action === "off") return c.state === "off";
+      if (step.action === "play" && step.item?.kind === "input" && c.library === "none") return c.state !== "off" && (c.source === step.item.id || c.app === step.item.id);
+      return step.action === "pause" ? c.state !== "playing" : step.action === "play" ? c.state === "playing" : false;
     case "switch": return step.action === "off" ? !c.on : step.action === "on" ? c.on : false;
     case "cover": return step.action === "open" ? c.open : step.action === "close" ? !c.open : false;
     case "lock": return step.action === "lock" && c.locked;
@@ -279,7 +331,7 @@ export function sceneHolds(scene: Pick<Scene, "steps">, devices: Device[]): bool
 export const sceneCan = (c: Control) => c.kind === "light" || c.kind === "switch" || c.kind === "cover" || c.kind === "lock" || c.kind === "media";
 
 /** What a scene may ask of each kind of thing. No "unlock": a scene never opens a door. */
-const FITS: Record<string, string[]> = { light: ["on", "off", "brightness"], switch: ["on", "off"], cover: ["open", "close"], lock: ["lock"], media: ["play", "pause"] };
+const FITS: Record<string, string[]> = { light: ["on", "off", "brightness"], switch: ["on", "off"], cover: ["open", "close"], lock: ["lock"], media: ["play", "pause", "on", "off"] };
 export const stepFits = (step: ControlRequest, c: Control) => (FITS[c.kind] ?? []).includes(step.action);
 
 /** The step that would put this control back the way it is right now. Never an unlock: a scene must not open a door. */
@@ -287,7 +339,10 @@ export function stepNow(c: Control): ControlRequest | undefined {
   switch (c.kind) {
     case "light": return c.on ? (c.dimmable ? { id: c.id, action: "brightness", value: Math.max(1, Math.round(c.brightness)), ...(c.kelvin ? { kelvin: c.kelvin } : c.rgb !== undefined ? { rgb: c.rgb } : {}) } : { id: c.id, action: "on" }) : { id: c.id, action: "off" };
     // Enough to put a speaker back: playing again, or quiet. What it was playing cannot be asked for again.
-    case "media": return { id: c.id, action: c.state === "playing" ? "play" : "pause" };
+    case "media":
+      // A TV is put back to off, or on at the input it was showing.
+      if (isScreen(c)) return c.state === "off" ? { id: c.id, action: "off" } : c.source && c.inputs.includes(c.source) ? { id: c.id, action: "play", item: { kind: "input", id: c.source, title: c.source } } : { id: c.id, action: "on" };
+      return { id: c.id, action: c.state === "playing" ? "play" : "pause" };
     case "switch": return { id: c.id, action: c.on ? "on" : "off" };
     case "cover": return { id: c.id, action: c.open ? "open" : "close" };
     case "climate": return c.target === undefined ? undefined : { id: c.id, action: "target", value: c.target };

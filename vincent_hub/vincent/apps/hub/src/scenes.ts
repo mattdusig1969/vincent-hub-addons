@@ -92,6 +92,12 @@ export class Scenes {
   /** One step. A speaker told what to play is set to its volume first, so it never starts too loud. */
   private async one(s: ControlRequest): Promise<void> {
     if (s.action !== "play" || !s.item) return this.devices.control(s);
+    // A TV asked for an input or an app: it has to be on and awake first, and that takes a while.
+    if (s.item.kind === "input") {
+      await this.devices.powerOn(s.id);
+      await this.media.play(s.id, s.item);
+      return;
+    }
     if (s.value !== undefined) await this.devices.control({ id: s.id, action: "volume", value: s.value });
     await this.media.play(s.id, s.item);
   }

@@ -7,6 +7,7 @@
  */
 import type { HA, HaState } from "./ha.ts";
 import { store } from "./store.ts";
+import { learnTvs, wakeTv } from "./tvpower.ts";
 import type { AddResult, Category, Control, ControlRequest, Device, Needs } from "../../../packages/core/src/index.ts";
 import { CLIMATE_MODES } from "../../../packages/core/src/index.ts";
 
@@ -42,6 +43,8 @@ const NOT_HOME = new Set(["ipp", "brother", "upnp", "dlna_dmr", "dlna_dms", "syn
 const DISCOVERED = new Set(["zeroconf", "ssdp", "dhcp", "homekit", "bluetooth", "usb", "mqtt", "integration_discovery", "hassio"]);
 
 /** What each maker calls the keys of its remote. Only makers listed here get a remote in the app. */
+/** The inputs each TV listed when it was last on, by entity. */
+const lastInputs = new Map<string, string[]>();
 const REMOTE_WORDS: Record<string, Record<string, string>> = {
   apple_tv: { up: "up", down: "down", left: "left", right: "right", select: "select", back: "menu", home: "home", playpause: "play_pause", rewind: "skip_backward", forward: "skip_forward", volup: "volume_up", voldown: "volume_down" },
   androidtv_remote: { up: "DPAD_UP", down: "DPAD_DOWN", left: "DPAD_LEFT", right: "DPAD_RIGHT", select: "DPAD_CENTER", back: "BACK", home: "HOME", playpause: "MEDIA_PLAY_PAUSE", rewind: "MEDIA_REWIND", forward: "MEDIA_FAST_FORWARD", volup: "VOLUME_UP", voldown: "VOLUME_DOWN" },
@@ -51,7 +54,7 @@ const REMOTE_WORDS: Record<string, Record<string, string>> = {
 interface Snapshot {
   devices: Device[];
   /** control id -> entity id + the device that owns it */
-  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; name?: string; events?: string[]; activity?: string; remote?: string }>;
+  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; /** For a TV that wakes by its hardware address: the setup that brought it, and the address its maker reports. */ entry?: string; mac?: string; name?: string; events?: string[]; activity?: string; remote?: string }>;
   /** entity id -> control id, for naming the other players in a group */
   byEntity: Map<string, string>;
   /** device id -> waiting flow */
@@ -113,6 +116,7 @@ export class Devices {
     const entryDomain = new Map<string, string>(entries.map((e: any) => [e.entry_id, e.domain]));
     const areaName = new Map<string, string>(areas.map((a: any) => [a.area_id, a.name]));
     const snap: Snapshot = { devices: [], controls: new Map(), byEntity: new Map(), flows: new Map() };
+    if (entries.some((e: any) => e.domain === "webostv")) learnTvs().catch(() => {});
     // Alexa lists every speaker on the Amazon account, Sonos speakers among them. Those are better added through Sonos itself
     // (favourites, grouping, the whole catalogue), and adding both would put the same speaker in the home twice.
     const twinOf = (integration: string, model: string, name: string) => (integration === "alexa_media" && /sonos/i.test(`${model} ${name}`) ? "Sonos" : undefined);
@@ -136,7 +140,9 @@ export class Devices {
         const beside = domain === "camera" ? ents.filter((x: any) => x.device_id === d.id && !x.disabled_by).map((x: any) => String(x.entity_id)) : [];
         // A TV box's remote is an entity of its own beside the player; its keys are sent there.
         const remote = domain === "media_player" && REMOTE_WORDS[integration] ? ents.find((x: any) => x.device_id === d.id && !x.disabled_by && String(x.entity_id).startsWith("remote."))?.entity_id as string | undefined : undefined;
+        const wakes = domain === "media_player" && integration === "webostv";
         snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host, ...(remote ? { remote } : {}),
+          ...(wakes ? { entry: (d.config_entries as string[]).find((id) => entryDomain.get(id) === "webostv"), mac: ((d.connections ?? []) as [string, string][]).find((c) => c[0] === "mac")?.[1] } : {}),
           ...(beside.length ? { events: beside.filter((x: string) => /^event\..*_(ding|motion)$/.test(x)), activity: beside.find((x: string) => /^sensor\..*_last_activity$/.test(x)) } : {}) });
         snap.byEntity.set(e.entity_id, e.id);
         controls.push(project(e.id, name, domain, undefined, integration, snap.byEntity, !!remote));
@@ -286,7 +292,10 @@ export class Devices {
     const v = req.value;
     const call = (service: string, data = {}, dom = domain) => this.ha.service(dom, service, entityId, data);
     switch (req.action) {
-      case "on": await call("turn_on", {}, "homeassistant"); break;
+      case "on":
+        // An LG that is off hears only a wake-up sent to its hardware address; its usual "turn on" does nothing by itself.
+        if (ref.entry !== undefined || ref.mac) { await wakeTv([ref.entry ? store.tvMac(ref.entry) : undefined, ref.mac]).catch(() => false); await call("turn_on", {}, "homeassistant").catch(() => {}); break; }
+        await call("turn_on", {}, "homeassistant"); break;
       case "off": await call("turn_off", {}, "homeassistant"); break;
       case "brightness": await call("turn_on", { brightness_pct: clamp(v, 1, 100), ...tint(req) }); break;
       case "color": case "white": if (domain !== "light" || !Object.keys(tint(req)).length) throw new Error("unknown action"); await call("turn_on", tint(req)); break;
@@ -330,6 +339,24 @@ export class Devices {
   }
 
   /** A media player the household added: what the hub needs to browse it and play on it. */
+  /**
+   * Makes sure a TV or TV box is on and answering before it is asked for an input or an app:
+   * switches it on if it is off, and waits (a TV takes a while to start). Throws if it never comes on.
+   */
+  async powerOn(controlId: string, waitMs = 30_000): Promise<void> {
+    const snap = await this.snapshot();
+    const ref = snap.controls.get(controlId);
+    if (!ref || ref.domain !== "media_player") return;
+    const isOff = () => { const st = this.ha.states.get(ref.entityId)?.state; return st === undefined || st === "off" || st === "standby" || st === "unavailable" || st === "unknown"; };
+    if (!isOff()) return;
+    await this.control({ id: controlId, action: "on" }).catch(() => {});
+    const until = Date.now() + waitMs;
+    while (isOff() && Date.now() < until) await new Promise((r) => setTimeout(r, 500));
+    if (isOff()) throw new Error("it did not switch on");
+    // On, but still starting: an input asked for in the first moments is often ignored.
+    await new Promise((r) => setTimeout(r, 2500));
+  }
+
   async player(controlId: string): Promise<{ entityId: string; integration: string; host?: string }> {
     const snap = await this.snapshot();
     const ref = snap.controls.get(controlId);
@@ -418,7 +445,9 @@ function project(id: string, name: string, domain: string, s: HaState | undefine
       const st = s?.state === "playing" ? "playing" : s?.state === "paused" ? "paused" : s?.state === "off" ? "off" : "idle";
       const sonos = integration === "sonos";
       // A Sonos lists its favourites as inputs too; those are shown as favourites, so only the real inputs stay here.
-      const inputs = (Array.isArray(a.source_list) ? (a.source_list as string[]) : []).filter((x) => !sonos || /^(tv|line-in)$/i.test(x));
+      let inputs = (Array.isArray(a.source_list) ? (a.source_list as string[]) : []).filter((x) => !sonos || /^(tv|line-in)$/i.test(x));
+      // A TV that is off often stops listing its inputs; what it listed while on still holds.
+      if (s && !sonos) { if (inputs.length) lastInputs.set(s.entity_id, inputs); else inputs = lastInputs.get(s.entity_id) ?? []; }
       // An Echo asked for something new sometimes keeps reporting the song it played before. Until its report changes,
       // what was asked for is shown, rather than a song that is no longer playing.
       const ask = s ? asked.get(s.entity_id) : undefined;
