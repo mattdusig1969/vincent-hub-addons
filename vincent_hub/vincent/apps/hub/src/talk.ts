@@ -66,7 +66,8 @@ What you may do:
 - Timers: set_timer starts one ("set a timer for ten minutes", "a pasta timer for 8 minutes"); it counts down on the screen and rings on the person's device. stop_timer stops or cancels one, ringing or not. Running timers are in THE HOUSE NOW; to say how long is left, look there.
 - Reminders and alarms: remind_me sets one for a day and time ("remind me to call the vet at 4", "wake me at 7 tomorrow", "every Monday at 9"). Work the date and time out from "Now" in THE HOUSE NOW. If no time of day was given, ask for one.
 - Lists: add_to_list puts something on one of the home's lists ("add milk to the shopping list"). Several things in one request: call it once for each.
-- You can also simply answer what a household helper is asked all day: the time and date, the weather, sums and unit conversions (cups to millilitres, Fahrenheit to Celsius), spelling, quick facts, a joke.
+- You can also simply answer what a household helper is asked all day: the time and date, the weather today and in the coming days (THE HOUSE NOW has the forecast), sums and unit conversions (cups to millilitres, Fahrenheit to Celsius), spelling, definitions, translations, quick facts, a joke, a story, how long to cook something.
+- You are connected to the internet through look_up. Use it whenever the answer is recent, local or you are not certain: news, sports scores and fixtures, opening hours, what is on, prices, the weather elsewhere or beyond the forecast you have, facts about people and places. Never say you cannot know such a thing: look it up, then answer in a sentence or two in your own manner.
 - You cannot change settings, add devices, or see cameras. You cannot make phone calls, send messages, or buy anything.
 - After using a tool, say what you did in a few words. If a tool reports a refusal, tell the person plainly.
 
@@ -106,7 +107,8 @@ function houseNow(h: TalkHouse): { text: string; handles: Map<string, { d: Devic
   const w = h.weather;
   const text = [
     `Home: ${h.homeName}. Now: ${when}.`,
-    w ? `Weather in ${w.place}: ${w.condition}, ${w.temperature}°${w.high !== undefined ? `, high ${w.high}°, low ${w.low}°` : ""}.` : "Weather: not known.",
+    w ? `Weather in ${w.place} now: ${w.condition}, ${w.temperature}°${w.high !== undefined ? `, high ${w.high}°, low ${w.low}°` : ""}${w.humidity !== undefined ? `, humidity ${w.humidity}%` : ""}${w.wind !== undefined ? `, wind ${Math.round(w.wind)}` : ""}.` : "Weather: not known.",
+    ...((w?.days ?? []).length ? [`Forecast: ${w!.days!.map((d) => `${new Date(d.date).toLocaleDateString("en-US", { timeZone: h.timeZone || undefined, weekday: "long", month: "short", day: "numeric" })}: ${d.condition}, high ${Math.round(d.high)}°${d.low !== undefined ? `, low ${Math.round(d.low)}°` : ""}${d.rain !== undefined ? `, ${Math.round(d.rain)}% chance of rain` : ""}`).join("; ")}.`] : []),
     `Rooms: ${h.rooms.map((r) => r.name).join(", ") || "none yet"}.`,
     "Devices (handle, name, kind, room: state):",
     ...(lines.length ? lines : ["(none added yet)"]),
@@ -142,6 +144,8 @@ const TOOLS = [{ functionDeclarations: [
       room: { type: "STRING", description: "The room's name, exactly as in THE HOUSE NOW." },
       source: { type: "STRING", enum: ["favourites", "siriusxm", "radio", "spotify", "amazon"], description: "Only when the person has said which service they mean, or has just answered your question about it. Otherwise leave it out." },
     }, required: ["query", "room"] } },
+  { name: "look_up", description: "Look something up on the internet and get a short answer: news, sports scores and schedules, opening hours, prices, who or what something is, the weather somewhere else or further ahead, anything recent or that you are not sure of.",
+    parameters: { type: "OBJECT", properties: { question: { type: "STRING", description: "The question, complete in itself, with the place or date if it matters." } }, required: ["question"] } },
   { name: "run_scene", description: "Run one of the home's scenes by its exact name.",
     parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
   { name: "set_timer", description: "Start a countdown timer. It shows on the screen and rings when it ends.",
@@ -290,6 +294,20 @@ export class Talk {
       const r = await this.deps.runScene(scene, (kind) => !barred(kind));
       this.deps.say(`Ran the scene "${scene.name}" by asking the host`, "scenes");
       return { ok: true, did: `Ran the scene "${scene.name}"${r.failed ? `; ${r.failed} thing${r.failed === 1 ? "" : "s"} did not answer` : ""}` };
+    }
+    if (name === "look_up") {
+      const q = String(args.question ?? "").trim().slice(0, 300);
+      if (!q) return { ok: false, error: "Ask what to look up." };
+      const key = this.key();
+      try {
+        const where = house.weather?.place ? ` The person asking is in ${house.weather.place}.` : "";
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000),
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: `Answer the question from a web search, in at most three plain sentences with the facts and figures asked for. No links, no markdown. Today is ${new Date().toLocaleDateString("en-US", { timeZone: house.timeZone || undefined, weekday: "long", month: "long", day: "numeric", year: "numeric" })}.${where} Suitable for a family.` }] }, contents: [{ role: "user", parts: [{ text: q }] }], tools: [{ googleSearch: {} }], generationConfig: { temperature: 0.2, maxOutputTokens: 1200 } }) });
+        const j: any = await r.json().catch(() => ({}));
+        const found = ((j?.candidates?.[0]?.content?.parts ?? []) as any[]).map((p) => p.text ?? "").join("").trim();
+        if (!r.ok || !found) { console.log(`[talk] look_up failed: ${r.status} ${String(j?.error?.message ?? "").slice(0, 160)}`); return { ok: false, error: "The look-up did not come back. Say so, and offer to try again." }; }
+        return { ok: true, found: found.slice(0, 1500) } as any;
+      } catch (e) { console.log(`[talk] look_up failed: ${(e as Error).message}`); return { ok: false, error: "The internet could not be reached just now." }; }
     }
     if (name === "set_timer") {
       const seconds = Math.round(Number(args.seconds));
