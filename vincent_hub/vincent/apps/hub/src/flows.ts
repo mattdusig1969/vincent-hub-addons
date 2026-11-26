@@ -34,6 +34,7 @@ const WHY: Record<string, string> = {
 /** These always get our word, whatever the maker calls them: nobody at home says "host". */
 /** Where a maker's own wording leaves people guessing, ours: by driver, then by the field's name. */
 const PLAINER: Record<string, Record<string, { label: string; help: string; required?: boolean }>> = {
+  tuya: { user_code: { label: "User Code", help: "From the Smart Life or Tuya Smart app: Me, the gear, Account and Security. Letters and numbers, typed exactly." } },
   generic: {
     stream_source: { required: true, label: "The camera's stream address", help: "Starts with rtsp:// and is shown in the camera's own app where you switched the stream on. Type it exactly." },
     username: { label: "Stream username", help: "Shown beside the address in the camera's app. Not your account email. If the app shows one, type it here." },
@@ -43,6 +44,18 @@ const PLAINER: Record<string, Record<string, { label: string; help: string; requ
     username: { label: "Amazon email", help: "The email you sign in to Amazon with." },
     password: { label: "Amazon password", help: "Sent encrypted, straight to Amazon." },
     code: { label: "Six-digit code from your authenticator app", help: "Open your authenticator app (Google Authenticator, Microsoft Authenticator, 1Password or similar), find Amazon, and type the six digits it shows right now. Nothing is texted to you: Amazon only allows an authenticator app for this. No Amazon entry in an authenticator app yet? On amazon.com go to Account, Login and security, Two-step verification, and add an authenticator app first." },
+  },
+};
+/** Tuya says "login error" for two different things; which one depends on the step. */
+const TUYA_WHY: Record<string, string> = {
+  user: "That User Code was not accepted. Look at it again in the app (Me, the gear, Account and Security) and type it exactly: capitals matter.",
+  scan: "The Smart Life app has not approved it yet, or the code ran out. Scan the new code below and confirm in the app, then tap Continue.",
+};
+/** Where a maker's own words for a whole step leave people guessing, ours: by driver, then by the step. */
+const STEPS: Record<string, Record<string, { title: string; text: string }>> = {
+  tuya: {
+    user: { title: "Your Tuya or Smart Life account", text: "Vincent uses the account you already have, with everything already set up in it. Open the Smart Life or Tuya Smart app on your phone, tap Me, then the gear at the top right, then Account and Security. Your User Code is at the bottom of that page." },
+    scan: { title: "Approve it in the Smart Life app", text: "Open the Smart Life or Tuya Smart app and tap the scan button at the top right of its first page. Point it at this code and confirm. If the app is on this same phone, take a screenshot of this page first, then in the app's scanner choose the picture from your photos. Come back here and tap Continue." },
   },
 };
 /** Questions a household cannot answer and need not: left out, the maker's default stands. */
@@ -138,6 +151,7 @@ export class Flows {
     if (o.menu) data.next_step_id = String(values.choice ?? "");
     else for (const f of o.fields) {
       const v = values[f.name];
+      if (f.type === "qr") continue;
       if (f.type === "toggle") data[f.name] = !!v;
       else if (v === undefined || v === null || v === "") { if (f.required) return { ...this.last.get(flowId)!, errors: { [f.name]: "This is needed." } }; }
       else data[f.name] = f.type === "number" ? Number(v) : String(v);
@@ -254,7 +268,7 @@ export class Flows {
         let fields = ((r.data_schema ?? []) as any[]).filter((e) => e.type !== "expandable" && !HIDDEN[domain]?.includes(e.name)).filter((e) => e.required || !(e.type === "multi_select" || e.selector?.select?.multiple || e.selector?.select?.custom_value))
           .map((e): StepField => field(e, say(`step.${r.step_id}.data.${e.name}`), say(`step.${r.step_id}.data_description.${e.name}`)))
           .map((f): StepField => ({ ...f, ...(PLAINER[String(r.handler)]?.[f.name] ?? {}) }));
-        const errors = Object.fromEntries(Object.entries((r.errors ?? {}) as Record<string, string>).map(([k, v]) => [k, plain(WHY[v] ?? say(`error.${v}`) ?? titled(String(v)))]));
+        const errors = Object.fromEntries(Object.entries((r.errors ?? {}) as Record<string, string>).map(([k, v]) => [k, plain(WHY[v] ?? (domain === "tuya" && v === "login_error" ? TUYA_WHY[String(r.step_id)] : undefined) ?? say(`error.${v}`) ?? titled(String(v)), r.description_placeholders)]));
         // Echo's first form has a dozen technical settings; a household is asked for three things and the rest keep their defaults.
         const echoFirst = domain === "alexa_media" && r.step_id === "user";
         if (echoFirst) {
@@ -265,6 +279,8 @@ export class Flows {
         }
         this.open.set(id!, { domain, rooms, fields, menu: false, tips, name, step: String(r.step_id ?? ""), hassUrl: this.open.get(id!)?.hassUrl, nested });
         const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's sign-in opens next. You type your email and password there, and a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
+        const ours = STEPS[domain]?.[String(r.step_id)];
+        if (ours) { step.title = ours.title; step.text = ours.text; }
         this.last.set(id!, step);
         return step;
       }
@@ -285,6 +301,8 @@ function field(e: any, label: string | undefined, help: string | undefined): Ste
   const selCfg = sel ? e.selector[sel] ?? {} : {};
   let type: StepField["type"] = "text";
   let options: StepField["options"];
+  // A square code for the maker's own app to scan (Tuya): shown, never answered.
+  if (sel === "qr_code") return { name, label: "Scan this with the maker's app", type: "qr", required: false, value: String(selCfg.data ?? "") };
   if (e.type === "boolean" || sel === "boolean") type = "toggle";
   else if (e.type === "integer" || e.type === "float" || e.type === "positive_int" || sel === "number") type = "number";
   else if (e.type === "select" || sel === "select") {

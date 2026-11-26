@@ -310,8 +310,8 @@ export interface StepField {
   name: string;
   label: string;
   help?: string;
-  /** code = a short number shown on the device or sent to the owner */
-  type: "text" | "password" | "number" | "code" | "toggle" | "choice";
+  /** code = a short number shown on the device or sent to the owner · qr = nothing to answer: a square code (`value`) to scan with the maker's own app */
+  type: "text" | "password" | "number" | "code" | "toggle" | "choice" | "qr";
   required: boolean;
   value?: string | number | boolean;
   options?: { value: string; label: string }[];
