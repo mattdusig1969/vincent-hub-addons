@@ -157,8 +157,27 @@ setInterval(async () => {
   try {
     const playing = (await devices.playersOf("alexa_media")).filter((e) => ha.states.get(e)?.state === "playing");
     if (playing.length) await ha.call({ type: "call_service", domain: "homeassistant", service: "update_entity", service_data: { entity_id: playing } });
+    // Home Assistant's line to Amazon can go quiet without saying so, and then an Echo stopped by voice shows as playing for good
+    // (asking again does not help; only connecting afresh does). An Echo "playing" the very same thing for half an hour gets that
+    // fresh connection, at most once each half hour. One really playing reads as playing again a few seconds later.
+    const now = Date.now();
+    for (const e of [...echoSame.keys()]) if (!playing.includes(e)) echoSame.delete(e);
+    let stuck: string | undefined;
+    for (const e of playing) {
+      const sig = String(ha.states.get(e)?.attributes?.media_title ?? "");
+      const was = echoSame.get(e);
+      if (!was || was.sig !== sig) echoSame.set(e, { sig, since: now });
+      else if (now - was.since > 30 * 60_000) stuck = e;
+    }
+    if (stuck && now - echoFresh > 30 * 60_000) {
+      echoFresh = now; echoSame.clear();
+      console.log(`[echo] ${stuck} has played the same thing for half an hour: connecting to Amazon afresh`);
+      await ha.call({ type: "call_service", domain: "homeassistant", service: "reload_config_entry", service_data: { entity_id: stuck } });
+    }
   } catch { /* next time */ }
 }, 20_000);
+const echoSame = new Map<string, { sig: string; since: number }>();
+let echoFresh = 0;
 /** Somebody's starred music changed (or whose device it is): every open app checks its own list at once. */
 const starsChanged = () => { for (const s of streams) s.write("event: stars\ndata: 1\n\n"); };
 // Every home starts with three lists. Made once, after setup, when the hub is reachable.

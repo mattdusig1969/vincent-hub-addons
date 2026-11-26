@@ -10,6 +10,7 @@
  */
 import { askedToPlay } from "./devices.ts";
 import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HA } from "./ha.ts";
 import type { Devices } from "./devices.ts";
@@ -29,10 +30,17 @@ const SIRIUSXM = 37, SPOTIFY = 12;
  */
 const pictures = new Map<string, string>();
 const fetched = new Map<string, { type: string; data: Buffer }>();
+// The addresses are kept on disk: a starred station holds only its token, and must still have its picture after the hub restarts.
+const picturesFile = join(dir, "pictures.json");
+try { for (const [k, v] of Object.entries(JSON.parse(readFileSync(picturesFile, "utf8")) as Record<string, string>)) pictures.set(k, v); } catch { /* none kept yet */ }
+let keeping: ReturnType<typeof setTimeout> | undefined;
 function picture(url: string | undefined): string | undefined {
   if (!url || !/^https?:\/\//.test(url)) return undefined;
   const token = createHash("sha256").update(url).digest("hex").slice(0, 24);
+  if (pictures.get(token) === url) return `/api/thumb/${token}`;
+  if (pictures.size >= 20_000) pictures.delete(pictures.keys().next().value!);
   pictures.set(token, url);
+  keeping ??= setTimeout(() => { keeping = undefined; try { mkdirSync(dir, { recursive: true }); writeFileSync(picturesFile, JSON.stringify(Object.fromEntries(pictures))); } catch { /* next time */ } }, 2000);
   return `/api/thumb/${token}`;
 }
 export async function thumb(token: string): Promise<{ type: string; data: Buffer } | null> {
