@@ -459,6 +459,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     unlockTimes.clear();
     json(res, 200, { ok: true, left });
     changed();
+    // The hub only notices a device on the network once: with every discovery forgotten, it has to start again to find them all afresh.
+    supervisor("POST", "/core/restart", 5 * 60_000).catch(() => {});
     // Start again with nothing remembered: on a hub its supervisor restarts this service; a development copy just stops.
     setTimeout(() => { supervisor("POST", "/addons/self/restart").catch(() => process.exit(0)); }, 800);
     return;
@@ -496,12 +498,13 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     if (m === "POST") {
       const b = await body(req);
       const list = (Array.isArray(b.stars) ? b.stars : []).filter((x: any) => x && typeof x.kind === "string" && typeof x.id === "string" && typeof x.title === "string")
-        .map((x: any) => ({ kind: x.kind, id: String(x.id).slice(0, 300), title: String(x.title).slice(0, 200), ...(typeof x.subtitle === "string" ? { subtitle: x.subtitle.slice(0, 200) } : {}), ...(typeof x.art === "string" ? { art: x.art.slice(0, 500) } : {}), ...(x.opens ? { opens: true } : {}), ...(x.plays === false ? { plays: false } : {}) }));
-      store.setStars(key, list);
+        .map((x: any) => ({ kind: x.kind, id: String(x.id).slice(0, 300), title: String(x.title).slice(0, 200), ...(typeof x.subtitle === "string" ? { subtitle: x.subtitle.slice(0, 200) } : {}), ...(typeof x.art === "string" ? { art: x.art.slice(0, 500) } : {}), ...(typeof x.src === "string" && /^https?:\/\//.test(x.src) ? { src: x.src.slice(0, 600) } : {}), ...(x.opens ? { opens: true } : {}), ...(x.plays === false ? { plays: false } : {}) }));
+      store.setStars(key, await media.mendStars(list).catch(() => list));
       starsChanged();
       return json(res, 200, { ok: true });
     }
-    return json(res, 200, { stars: store.starsOf(key) ?? null, person: store.device(key)?.person ?? "" });
+    const kept = store.starsOf(key);
+    return json(res, 200, { stars: kept ? await media.mendStars(kept as any[]).catch(() => kept) : null, person: store.device(key)?.person ?? "" });
   }
   if (m === "POST" && path === "/api/look") {
     const b = await body(req);

@@ -366,6 +366,12 @@ export class Flows {
         const step: Step = { kind: "form", flow: id, title: plain(say(`step.${r.step_id}.title`) ?? name ?? "A question from the maker"), text: echoFirst ? "Amazon's sign-in opens next. You type your email and password there, and a code texted to your phone works." : plain(say(`step.${r.step_id}.description`) ?? "", r.description_placeholders), fields, errors };
         const ours = STEPS[domain]?.[String(r.step_id)];
         if (ours) { step.title = ours.title; step.text = ours.text; step.picture = ours.picture; }
+        // An Apple TV shows four digits on the screen, sometimes more than once: four boxes, and no talk of protocols.
+        if (domain === "apple_tv" && fields.length === 1 && fields[0].name === "pin") {
+          fields[0] = { ...fields[0], label: "The code on your TV", help: undefined, type: "code", digits: 4 };
+          step.title = "The code on your TV";
+          step.text = "Your Apple TV is showing four digits. Type them here. It may ask a second time: that is a new code each time.";
+        }
         this.last.set(id!, step);
         return step;
       }

@@ -43,6 +43,11 @@ function picture(url: string | undefined): string | undefined {
   keeping ??= setTimeout(() => { keeping = undefined; try { mkdirSync(dir, { recursive: true }); writeFileSync(picturesFile, JSON.stringify(Object.fromEntries(pictures))); } catch { /* next time */ } }, 2000);
   return `/api/thumb/${token}`;
 }
+/** Where a picture's token points, when this hub knows. */
+export const pictureSource = (art: string | undefined): string | undefined => pictures.get(String(art ?? "").replace(/^\/api\/thumb\//, ""));
+/** The picture address for a source address, known to this hub from now on. */
+export const pictureFor = (url: string | undefined): string | undefined => picture(url);
+
 export async function thumb(token: string): Promise<{ type: string; data: Buffer } | null> {
   const hit = fetched.get(token);
   if (hit) return hit;
@@ -173,6 +178,23 @@ export class Media {
       out.amazon = AMAZON_PICKS.map((g) => ({ label: g.label, items: g.picks.map((name): MediaItem => ({ kind: "amazon", id: name, title: name, subtitle: "Amazon Music" })) }));
     } else {
       out.inputs = list.map((x) => ({ kind: "input", id: x, title: x }));
+    }
+    return out;
+  }
+
+  /**
+   * Starred things keep their pictures on any hub: each star carries where its picture really is (`src`),
+   * so a hub that has never listed it (a new hub, an erased one) can still show it. A SiriusXM channel's
+   * picture is looked up afresh in the channel guide.
+   */
+  async mendStars<T extends { kind: string; id: string; art?: string; src?: string }>(stars: T[]): Promise<T[]> {
+    let channels: Awaited<ReturnType<SxmLineup["channels"]>> | undefined;
+    const out: T[] = [];
+    for (const st of stars) {
+      let src = st.src ?? pictureSource(st.art);
+      if (!src && st.kind === "sxm") { channels ??= await this.lineup.channels().catch(() => []); src = channels.find((c) => c.uuid === st.id)?.logo; }
+      const art = src ? pictureFor(src) : st.art;
+      out.push({ ...st, ...(art ? { art } : {}), ...(src ? { src } : {}) });
     }
     return out;
   }
