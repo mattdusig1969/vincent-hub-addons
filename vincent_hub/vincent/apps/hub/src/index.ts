@@ -147,8 +147,11 @@ function matterWhy(m: string): string {
   if (/timeout|did not answer/i.test(m)) return "The device did not answer. It must be switched on, on your Wi-Fi, and its code freshly made in the maker's app.";
   return "That code was not accepted. Codes last only a few minutes: make a new one in the maker's app and try again.";
 }
+let storeLooked = 0;
 async function software(): Promise<Software> {
   try {
+    // The hub is asked to look for a newer Vincent now and then, so an update is offered the day it is out.
+    if (Date.now() - storeLooked > 30 * 60_000) { storeLooked = Date.now(); await supervisor("POST", "/store/reload", 60_000).catch(() => {}); }
     const info = await supervisor("GET", "/addons/self/info");
     return { version: info.version ?? "", latest: info.version_latest ?? info.version ?? "", canUpdate: !!info.update_available };
   } catch { return { version: "", latest: "", canUpdate: false }; }
