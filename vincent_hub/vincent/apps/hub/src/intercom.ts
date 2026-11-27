@@ -70,6 +70,8 @@ export class Intercom {
     if (place.startsWith("screen:")) return others.filter((s) => s.id === place.slice(7));
     return [];
   }
+  /** How many open screens a place has, other than the asker's. */
+  count(place: string, asker: string): number { return this.at(place, asker).length; }
   private whoIs(line: string): Screen {
     const s = this.screens.get(line);
     if (!s) throw new Error("This screen's line to the hub dropped. Try again in a moment.");

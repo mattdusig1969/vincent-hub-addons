@@ -1,5 +1,5 @@
 name: Vincent Hub
-version: "0.7.26"
+version: "0.7.27"
 slug: vincent_hub
 description: The Vincent hub service. Holds the home's device list and serves the Vincent app.
 arch:
@@ -24,7 +24,9 @@ options:
   image_key: ""
   push_key: ""
   push_key_id: ""
+  house_line: ""
 schema:
   image_key: password?
   push_key: password?
   push_key_id: str?
+  house_line: str?

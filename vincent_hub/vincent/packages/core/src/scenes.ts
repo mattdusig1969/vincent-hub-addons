@@ -143,6 +143,11 @@ const sleep: Recipe = (h) => [...h.lights.map(off), ...h.music.map(hush), ...h.c
 
 /** A television or a TV box, as against a music speaker. */
 export const isScreen = (c: Control): boolean => c.kind === "media" && c.library === "none" && (!!c.remote || c.inputs.length >= 2);
+/** What to say of a player with no song to name. A screen that is on says what it is showing (its app or input), not "Nothing playing". */
+export function idleWords(c: Extract<Control, { kind: "media" }>): { title: string; detail: string } {
+  if (isScreen(c)) return c.state === "off" ? { title: "Off", detail: "" } : { title: c.app || c.source || "On", detail: c.app || c.source ? "On" : "" };
+  return { title: c.state === "playing" ? "Playing" : "Nothing playing", detail: "" };
+}
 /**
  * Whether one of a TV's sources is a socket on its back (something plugged in) rather than an app on the TV itself.
  * A TV lists both together, and an app can carry the same name as a box: LG's "Apple TV" is its app, "Apple OTT" the box on HDMI.

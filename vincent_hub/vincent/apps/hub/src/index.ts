@@ -59,6 +59,7 @@ import { Devices } from "./devices.ts";
 import { Media, radio, thumb } from "./media.ts";
 import { Cameras } from "./cameras.ts";
 import { Intercom } from "./intercom.ts";
+import { HouseLine } from "./houseline.ts";
 import { Talk, TalkRefusal, type TalkDeps } from "./talk.ts";
 import { Place } from "./place.ts";
 import { Lists } from "./lists.ts";
@@ -92,6 +93,7 @@ const isOffScene = (x: Scene) => x.auto === "off" || (x.id === "everything-off" 
 const offSteps = (x: Scene, all: Device[]) => { const out = new Set(x.except ?? []), own = x.auto === "off" ? x.steps : []; return [...everythingOff(all).filter((a) => !out.has(a.id) && !own.some((o) => o.id === a.id)), ...own]; };
 const scenesNow = async (): Promise<Scene[]> => { const list = store.scenes(); if (!list.some(isOffScene)) return list; const all = await devices.all(); return list.map((x) => (isOffScene(x) ? { ...x, auto: "off" as const, steps: offSteps(x, all) } : x)); };
 const intercom = new Intercom((id) => store.rooms().find((r) => r.id === id)?.name ?? "");
+new HouseLine(intercom, () => store.rooms()); // one home only; off unless given that house's address
 const place = new Place(ha);
 const lists = new Lists(ha);
 // "Now playing" on each iPhone's Lock Screen.
