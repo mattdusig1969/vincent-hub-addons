@@ -6,6 +6,7 @@
  * make the pictures. One picture at a time can be made again.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { google, CloudLimit } from "./cloud.ts";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { CHARACTERS, STYLES } from "../../../packages/core/src/index.ts";
@@ -40,12 +41,6 @@ export class Portraits {
     mkdirSync(join(this.dir, "photos"), { recursive: true });
   }
 
-  /** The image service's key: the hub service's own setting, never part of the published code. */
-  private key(): string {
-    if (process.env.VINCENT_IMAGE_KEY) return process.env.VINCENT_IMAGE_KEY;
-    try { return String(JSON.parse(readFileSync("/data/options.json", "utf8")).image_key ?? ""); } catch { return ""; }
-  }
-
   photos(): string[] { return readdirSync(join(this.dir, "photos")).filter((f) => f.endsWith(".jpg")).sort().map((f) => f.slice(0, -4)); }
   photoFile(id: string): string { return join(this.dir, "photos", `${id.replace(/[^a-z0-9]/g, "")}.jpg`); }
   file(character: string): string { return join(this.dir, `${character.replace(/[^a-z]/g, "")}.img`); }
@@ -68,7 +63,7 @@ export class Portraits {
       try { style = readFileSync(this.file(c.id) + ".style", "utf8"); } catch { /* drawn before outfits were kept */ }
       characters[c.id] = { state: job?.state ?? "idle", startedAt: job?.startedAt, message: job?.message, version, style };
     }
-    return { available: !!this.key(), photos: this.photos(), seconds: Math.round(this.typical), characters };
+    return { available: true, photos: this.photos(), seconds: Math.round(this.typical), characters };
   }
 
   /** Back to the standard picture. */
@@ -82,7 +77,6 @@ export class Portraits {
   private claims = new Map<string, string>();
 
   start(ids: string[], styleOf: (id: string) => string): void {
-    if (!this.key()) throw new Error("Pictures of your home are not switched on for this hub yet.");
     if (!this.photos().length) throw new Error("Add a photo of your home first.");
     for (const id of ids) {
       if (!CHARACTERS.some((c) => c.id === id)) continue;
@@ -146,10 +140,7 @@ export class Portraits {
     let why = "The picture could not be made. Try again.";
     for (const model of MODELS) {
       try {
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.key()}`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(150_000),
-          body: JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["IMAGE"] } }),
-        });
+        const r = await google(`v1beta/models/${model}:generateContent`, { contents: [{ parts }], generationConfig: { responseModalities: ["IMAGE"] } }, { kind: "picture", timeout: 170_000 });
         const j: any = await r.json().catch(() => ({}));
         const got = (j.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.inline_data ?? p.inlineData).find(Boolean);
         if (got?.data) {
@@ -162,7 +153,10 @@ export class Portraits {
         if (r.status === 402 || r.status === 429 || r.status === 403) why = "The picture service is not taking requests right now, so no new pictures were made. This is on Vincent's side, not yours. Please try again later.";
         else if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === "SAFETY") why = "The picture service would not use one of these photos. Try different photos.";
         console.log(`[portraits] ${model} gave no picture (${r.status} ${j.error?.message?.slice(0, 120) ?? j.candidates?.[0]?.finishReason ?? ""})`);
-      } catch (e) { console.log(`[portraits] ${model}: ${(e as Error).message}`); }
+      } catch (e) {
+        if (e instanceof CloudLimit) { why = "Your home has had as many new pictures as it can for today. Try again tomorrow."; break; }
+        console.log(`[portraits] ${model}: ${(e as Error).message}`);
+      }
     }
     throw new Error(why);
   }

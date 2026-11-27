@@ -77,6 +77,7 @@ import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.t
 import { store } from "./store.ts";
 import { NowPlaying } from "./nowplaying.ts";
 import { Backup } from "./backup.ts";
+import { cloudVersion } from "./cloud.ts";
 import type { Device, Repeat, Scene } from "../../../packages/core/src/index.ts";
 import { dayKey, whenDue, whenWords, everythingOff, cleanSays, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
 import { THEMES, CUSTOM_THEME, cleanPalette, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
@@ -158,7 +159,7 @@ async function software(): Promise<Software> {
 }
 
 let myVersion = "";
-software().then((s) => { myVersion = s.version; });
+software().then((s) => { myVersion = s.version; cloudVersion(s.version); });
 /** Copies of the home, and bringing a home over from another hub. Only on a real hub. */
 const backup = process.env.SUPERVISOR_TOKEN ? new Backup(supervisor, () => myVersion) : null;
 // A move that was cut short after the hub's own records arrived is finished at the next start.

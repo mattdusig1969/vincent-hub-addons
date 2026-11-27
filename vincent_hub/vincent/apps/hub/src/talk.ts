@@ -11,11 +11,12 @@
  * short passes (see `key()`), so the key is on no hub and use can be counted per device.
  */
 import { readFileSync } from "node:fs";
+import { google, CloudLimit } from "./cloud.ts";
 import { CHARACTERS, CLIMATE_MODES, RULES, controlWords, ruleFor, type MediaItem, type Control, type ControlRequest, type Device, type Weather, type ListSummary, type Scene, type Room, type Timer, timerWords } from "../../../packages/core/src/index.ts";
 
 export interface TalkTurn { role: "you" | "host"; text: string }
 export interface TalkHouse { devices: Device[]; rooms: Room[]; scenes: Scene[]; weather?: Weather; lists: ListSummary[]; timers: Timer[]; homeName: string; timeZone: string }
-export interface TalkAsker { name: string; person: string; deny: string[]; /** The room this phone or tablet lives in, when it has said so. */ room?: string }
+export interface TalkAsker { /** Which phone or tablet, for counting use. */ id?: string; name: string; person: string; deny: string[]; /** The room this phone or tablet lives in, when it has said so. */ room?: string }
 export interface TalkDeps {
   house: () => Promise<TalkHouse>;
   control: (req: ControlRequest) => Promise<void>;
@@ -170,23 +171,18 @@ const SAFETY = ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_C
 /** For a second try after a harmless answer was stopped: unkindness is judged a little less strictly (a host telling its own sad story trips the strictest setting); everything else stays as strict. */
 const SAFETY_AGAIN = SAFETY.map((x) => (x.category === "HARM_CATEGORY_HARASSMENT" ? { ...x, threshold: "BLOCK_MEDIUM_AND_ABOVE" } : x));
 
+const LIMIT_WORDS = "Your host has talked as much as they can for today. They will be back tomorrow.";
+
 export class Talk {
   private deps: TalkDeps;
   constructor(deps: TalkDeps) { this.deps = deps; }
 
-  /** The key for Google's service. The one place to change when keys move off the hub to a service of ours. */
-  private key(): string {
-    if (process.env.VINCENT_TALK_KEY) return process.env.VINCENT_TALK_KEY;
-    if (process.env.VINCENT_IMAGE_KEY) return process.env.VINCENT_IMAGE_KEY;
-    try { const o = JSON.parse(readFileSync("/data/options.json", "utf8")); return String(o.talk_key || o.image_key || ""); } catch { return ""; }
-  }
-  get available(): boolean { return !!this.key(); }
+  /** Conversation is always on: a hub with no key of its own asks through Vincent's service. */
+  get available(): boolean { return true; }
 
   /** One reply from the host. `turns` is the conversation so far, ending with what the person just said. */
   async reply(character: string, turns: TalkTurn[], asker: TalkAsker): Promise<{ text: string; did: string[] }> {
     if (asker.deny.includes("talk")) throw new TalkRefusal("rule", "This device is not allowed to talk to the host. The home's owner can change that in Settings.");
-    const key = this.key();
-    if (!key) throw new TalkRefusal("off", "Talking to your host is not switched on for this hub yet.");
     const house = await this.deps.house(), { text: now, handles } = houseNow(house);
     const barred = (kind: string) => { const rule = ruleFor(kind); return !!rule && asker.deny.includes(rule); };
     const system = this.system(character, asker, now);
@@ -197,11 +193,9 @@ export class Talk {
     for (let round = 0; round < 7; round++) {
       let r: Response;
       try {
-        r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25_000),
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, tools: TOOLS, safetySettings: again ? SAFETY_AGAIN : SAFETY, generationConfig: { temperature: 0.8, maxOutputTokens: 2000 } }),
-        });
+        r = await google(`v1beta/models/${MODEL}:generateContent`, { systemInstruction: { parts: [{ text: system }] }, contents, tools: TOOLS, safetySettings: again ? SAFETY_AGAIN : SAFETY, generationConfig: { temperature: 0.8, maxOutputTokens: 2000 } }, { kind: "talk", device: asker.id, timeout: 25_000 });
       } catch (e) {
+        if (e instanceof CloudLimit) throw new TalkRefusal("limit", LIMIT_WORDS);
         // Too slow is not the same as offline: say which.
         if ((e as Error).name === "TimeoutError" || (e as Error).name === "AbortError") { console.log("[talk] the service took too long"); throw new TalkRefusal("slow", "Your host took too long to answer. Try again."); }
         console.log(`[talk] could not reach the service: ${(e as Error).message}`);
@@ -246,16 +240,13 @@ export class Talk {
    */
   async live(character: string, voice: { locale: string; voice: string }, earlier: TalkTurn[], asker: TalkAsker): Promise<{ url: string; setup: unknown }> {
     if (asker.deny.includes("talk")) throw new TalkRefusal("rule", "This device is not allowed to talk to the host. The home's owner can change that in Settings.");
-    const key = this.key();
-    if (!key) throw new TalkRefusal("off", "Talking to your host is not switched on for this hub yet.");
     let pass = "";
     try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1alpha/auth_tokens?key=${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(12_000),
-        body: JSON.stringify({ uses: 1, expireTime: new Date(Date.now() + 30 * 60_000).toISOString(), newSessionExpireTime: new Date(Date.now() + 2 * 60_000).toISOString() }) });
+      const r = await google("v1alpha/auth_tokens", { uses: 1, expireTime: new Date(Date.now() + 30 * 60_000).toISOString(), newSessionExpireTime: new Date(Date.now() + 2 * 60_000).toISOString() }, { kind: "live", device: asker.id, timeout: 12_000 });
       const j: any = await r.json().catch(() => ({}));
       if (!r.ok || !j.name) { console.log(`[talk] no pass: ${r.status} ${String(j?.error?.message ?? "").slice(0, 160)}`); throw new TalkRefusal("service", "Your host could not start listening just now. Try again in a moment."); }
       pass = j.name;
-    } catch (e) { if (e instanceof TalkRefusal) throw e; console.log(`[talk] no pass: ${(e as Error).message}`); throw new TalkRefusal("offline", "The hub could not reach the internet, so chat cannot work right now."); }
+    } catch (e) { if (e instanceof TalkRefusal) throw e; if (e instanceof CloudLimit) throw new TalkRefusal("limit", LIMIT_WORDS); console.log(`[talk] no pass: ${(e as Error).message}`); throw new TalkRefusal("offline", "The hub could not reach the internet, so chat cannot work right now."); }
     const { text: now } = houseNow(await this.deps.house());
     const said = earlier.slice(-12).map((t) => `${t.role === "you" ? "They" : "You"}: ${String(t.text).slice(0, 400)}`).join("\n");
     const ending = `\n\nWHEN TO STOP LISTENING (this is a spoken conversation; the microphone hears the whole room)
@@ -298,11 +289,9 @@ export class Talk {
     if (name === "look_up") {
       const q = String(args.question ?? "").trim().slice(0, 300);
       if (!q) return { ok: false, error: "Ask what to look up." };
-      const key = this.key();
       try {
         const where = house.weather?.place ? ` The person asking is in ${house.weather.place}.` : "";
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000),
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: `Answer the question from a web search, in at most three plain sentences with the facts and figures asked for. No links, no markdown. Today is ${new Date().toLocaleDateString("en-US", { timeZone: house.timeZone || undefined, weekday: "long", month: "long", day: "numeric", year: "numeric" })}.${where} Suitable for a family.` }] }, contents: [{ role: "user", parts: [{ text: q }] }], tools: [{ googleSearch: {} }], generationConfig: { temperature: 0.2, maxOutputTokens: 1200 } }) });
+        const r = await google(`v1beta/models/${MODEL}:generateContent`, { systemInstruction: { parts: [{ text: `Answer the question from a web search, in at most three plain sentences with the facts and figures asked for. No links, no markdown. Today is ${new Date().toLocaleDateString("en-US", { timeZone: house.timeZone || undefined, weekday: "long", month: "long", day: "numeric", year: "numeric" })}.${where} Suitable for a family.` }] }, contents: [{ role: "user", parts: [{ text: q }] }], tools: [{ googleSearch: {} }], generationConfig: { temperature: 0.2, maxOutputTokens: 1200 } }, { kind: "talk", timeout: 20_000 });
         const j: any = await r.json().catch(() => ({}));
         const found = ((j?.candidates?.[0]?.content?.parts ?? []) as any[]).map((p) => p.text ?? "").join("").trim();
         if (!r.ok || !found) { console.log(`[talk] look_up failed: ${r.status} ${String(j?.error?.message ?? "").slice(0, 160)}`); return { ok: false, error: "The look-up did not come back. Say so, and offer to try again." }; }
