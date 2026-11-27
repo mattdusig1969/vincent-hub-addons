@@ -199,6 +199,25 @@ setInterval(async () => {
 }, 20_000);
 // A TV box whose link to the hub has gone quiet shows what it did hours ago. Checked each minute: sooner while somebody has the app open.
 setInterval(() => { if (ha.connected) devices.all().then(() => devices.refreshBoxes((streams.size ? 30 : 120) * 60_000)).catch(() => {}); }, 60_000);
+// The hub keeps itself up to date: when a newer Vincent is out it is put on while nobody has the app open (or in the small hours), never in the middle of setting something up.
+let lastSeenOpen = Date.now();
+setInterval(async () => {
+  if (streams.size) lastSeenOpen = Date.now();
+  const quiet = Date.now() - lastSeenOpen > 10 * 60_000, night = new Date().getHours() === 3;
+  if (!process.env.SUPERVISOR_TOKEN || !ha.connected || !(quiet || night)) return;
+  if (backup && !["", "done", "failed"].includes(backup.state.step)) return;
+  try {
+    const soft = await software();
+    if (!soft.canUpdate) return;
+    const info = await supervisor("GET", "/addons/self/info");
+    const entity = [...ha.states.values()].find((x) => x.entity_id.startsWith("update.") && x.attributes?.title === info.name)?.entity_id;
+    if (!entity) return;
+    await ha.service("homeassistant", "update_entity", entity).catch(() => {});
+    console.log(`[hub] a newer Vincent is out (${soft.latest}): updating by itself`);
+    changes.add("The hub", `Updated Vincent to ${soft.latest}`);
+    await ha.service("update", "install", entity);
+  } catch (e) { console.log(`[hub] could not update itself: ${(e as Error).message}`); }
+}, 5 * 60_000);
 const echoSame = new Map<string, { sig: string; since: number }>();
 let echoFresh = 0;
 /** Somebody's starred music changed (or whose device it is): every open app checks its own list at once. */
