@@ -186,6 +186,8 @@ setInterval(async () => {
     }
   } catch { /* next time */ }
 }, 20_000);
+// A TV box whose link to the hub has gone quiet shows what it did hours ago. Checked each minute: sooner while somebody has the app open.
+setInterval(() => { if (ha.connected) devices.all().then(() => devices.refreshBoxes((streams.size ? 30 : 120) * 60_000)).catch(() => {}); }, 60_000);
 const echoSame = new Map<string, { sig: string; since: number }>();
 let echoFresh = 0;
 /** Somebody's starred music changed (or whose device it is): every open app checks its own list at once. */

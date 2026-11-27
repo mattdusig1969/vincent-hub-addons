@@ -54,7 +54,7 @@ const REMOTE_WORDS: Record<string, Record<string, string>> = {
 interface Snapshot {
   devices: Device[];
   /** control id -> entity id + the device that owns it */
-  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; /** For a TV that wakes by its hardware address: the setup that brought it, and the address its maker reports. */ entry?: string; mac?: string; name?: string; events?: string[]; activity?: string; remote?: string }>;
+  controls: Map<string, { entityId: string; deviceId: string; domain: string; integration: string; host?: string; /** For a TV that wakes by its hardware address: the setup that brought it, and the address its maker reports. */ entry?: string; mac?: string; name?: string; events?: string[]; activity?: string; remote?: string; /** For a TV box that can stop answering without saying so: the setup that brought it. */ box?: string }>;
   /** entity id -> control id, for naming the other players in a group */
   byEntity: Map<string, string>;
   /** device id -> waiting flow */
@@ -142,6 +142,7 @@ export class Devices {
         const remote = domain === "media_player" && REMOTE_WORDS[integration] ? ents.find((x: any) => x.device_id === d.id && !x.disabled_by && String(x.entity_id).startsWith("remote."))?.entity_id as string | undefined : undefined;
         const wakes = domain === "media_player" && integration === "webostv";
         snap.controls.set(e.id, { entityId: e.entity_id, deviceId: d.id, domain, integration, host, ...(remote ? { remote } : {}),
+          ...(domain === "media_player" && integration === "apple_tv" ? { box: (d.config_entries as string[]).find((id) => entryDomain.get(id) === "apple_tv") } : {}),
           ...(wakes ? { entry: (d.config_entries as string[]).find((id) => entryDomain.get(id) === "webostv"), mac: ((d.connections ?? []) as [string, string][]).find((c) => c[0] === "mac")?.[1] } : {}),
           ...(beside.length ? { events: beside.filter((x: string) => /^event\..*_(ding|motion)$/.test(x)), activity: beside.find((x: string) => /^sensor\..*_last_activity$/.test(x)) } : {}) });
         snap.byEntity.set(e.entity_id, e.id);
@@ -283,8 +284,48 @@ export class Devices {
     }
   }
 
+  private reconnected = new Map<string, number>();
+
+  /**
+   * An Apple TV can stop answering the hub without the hub noticing: it then shows whatever it was doing
+   * hours ago and refuses every command. Setting its link up afresh cures it, and takes a few seconds.
+   */
+  private async reconnect(box: string, entityId: string, why: string): Promise<boolean> {
+    if (Date.now() - (this.reconnected.get(box) ?? 0) < 60_000) return false;
+    this.reconnected.set(box, Date.now());
+    console.log(`[tv] ${entityId} ${why}: connecting to it afresh`);
+    try { await this.ha.rest("POST", `/config/config_entries/entry/${box}/reload`); } catch (e) { console.log(`[tv] could not: ${(e as Error).message}`); return false; }
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const st = this.ha.states.get(entityId)?.state;
+      if (i > 1 && st && st !== "unavailable" && st !== "unknown") return true;
+    }
+    return false;
+  }
+
+  /** Looks for TV boxes that have sat "paused" or idle for hours, which is how a lost link shows, and connects to them afresh. */
+  async refreshBoxes(quietMs: number): Promise<void> {
+    if (!this.snap) return;
+    for (const ref of this.snap.controls.values()) {
+      if (!ref.box) continue;
+      const s = this.ha.states.get(ref.entityId);
+      if (!s || !["paused", "idle", "playing"].includes(s.state)) continue;
+      const quiet = Date.now() - Date.parse(s.last_changed);
+      if (quiet < (s.state === "playing" ? 6 * 3600_000 : quietMs) || Date.now() - (this.reconnected.get(ref.box) ?? 0) < quietMs) continue;
+      await this.reconnect(ref.box, ref.entityId, `has not changed in ${Math.round(quiet / 60_000)} min`).catch(() => {});
+    }
+  }
+
   /** Commands only reach devices the household added. */
   async control(req: ControlRequest): Promise<void> {
+    try { await this.act(req); } catch (e) {
+      const ref = (await this.snapshot()).controls.get(req.id);
+      if (!ref?.box || /unknown|not been added/.test((e as Error).message) || !(await this.reconnect(ref.box, ref.entityId, `refused a command (${(e as Error).message})`))) throw e;
+      await this.act(req);
+    }
+  }
+
+  private async act(req: ControlRequest): Promise<void> {
     const snap = await this.snapshot();
     const ref = snap.controls.get(req.id);
     const dev = ref && snap.devices.find((d) => d.id === ref.deviceId);
