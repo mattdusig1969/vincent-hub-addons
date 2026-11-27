@@ -170,6 +170,11 @@ export class NowPlaying {
       if (JSON.stringify(reg.look) !== JSON.stringify(look)) { reg.look = look; reg.lastSent = undefined; this.save(); }
       return true;
     }
+    // The cards really showing on the phone. One the hub still remembers but the phone no longer has was taken down by iOS.
+    if (Array.isArray(b.cards)) {
+      const live = new Set(b.cards.map(String));
+      for (const id of Object.keys(reg.activities)) if (!live.has(id) && id !== activity) { delete reg.activities[id]; reg.lastSent = undefined; console.log(`[nowplaying] ${phone.slice(0, 6)} no longer shows a card the hub remembered`); }
+    }
     if (b.kind === "start" && token) reg.startToken = token;
     else if (b.kind === "update" && token && activity) { reg.activities[activity] = { token, at: Date.now() }; reg.lastSent = undefined; }
     else if ((b.kind === "ended" || b.kind === "dismissed") && activity) { delete reg.activities[activity]; if (b.kind === "dismissed") reg.dismissedSession = reg.session; }
