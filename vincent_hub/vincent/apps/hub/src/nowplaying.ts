@@ -27,10 +27,13 @@ const ATTR_TYPE = "VincentNowPlaying";
 const TEAM = process.env.VINCENT_PUSH_TEAM || "P3Z4PY2VXA";
 const TOPIC = process.env.VINCENT_PUSH_TOPIC || "com.dfcllc.vincent";
 
-interface Content { id: string; room: string; title: string; artist: string; playing: boolean }
+interface Content { id: string; room: string; title: string; artist: string; playing: boolean; paper?: string; ink?: string; accent?: string }
+/** The colours of the style the phone's owner chose, so the card matches the app. Without them the card is the phone's own plain one. */
+interface Look { paper: string; ink: string; accent: string }
 interface Reg {
   /** The speaker (control id) this phone last played or controlled. */
   follows?: string;
+  look?: Look;
   startToken?: string;
   activities: Record<string, { token: string; at: number }>;
   lastSent?: string;
@@ -160,6 +163,13 @@ export class NowPlaying {
     const token = typeof b.token === "string" && /^[0-9a-f]{32,400}$/i.test(b.token) ? b.token.toLowerCase() : undefined;
     const activity = typeof b.activity === "string" ? b.activity.slice(0, 80) : "";
     const reg = (this.regs[phone] ??= { activities: {} });
+    const hex = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : "");
+    if (b.kind === "look") {
+      const look = { paper: hex(b.paper), ink: hex(b.ink), accent: hex(b.accent) };
+      if (!look.paper || !look.ink || !look.accent) return false;
+      if (JSON.stringify(reg.look) !== JSON.stringify(look)) { reg.look = look; reg.lastSent = undefined; this.save(); }
+      return true;
+    }
     if (b.kind === "start" && token) reg.startToken = token;
     else if (b.kind === "update" && token && activity) { reg.activities[activity] = { token, at: Date.now() }; reg.lastSent = undefined; }
     else if ((b.kind === "ended" || b.kind === "dismissed") && activity) { delete reg.activities[activity]; if (b.kind === "dismissed") reg.dismissedSession = reg.session; }
@@ -193,7 +203,8 @@ export class NowPlaying {
     let dirty = false;
     for (const [phone, reg] of Object.entries(this.regs)) {
       if (!phones.includes(phone)) { delete this.regs[phone]; dirty = true; continue; } // it left the home
-      const c = this.content(devices, rooms, reg.follows);
+      const plain = this.content(devices, rooms, reg.follows);
+      const c = plain && reg.look ? { ...plain, ...reg.look } : plain;
       if (c?.playing) {
         reg.lastPlayingAt = now;
         if (!reg.sessionOpen) { reg.sessionOpen = true; reg.session = (reg.session ?? 0) + 1; dirty = true; }
