@@ -1021,7 +1021,8 @@ const SIGNED_IN = `<!doctype html><html><head><meta charset="utf-8"><meta name="
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4efe6;color:#2a2622;font-family:-apple-system,system-ui,sans-serif;text-align:center}
 main{padding:32px}.m{width:72px;height:72px;margin:0 auto 20px;border-radius:50%;background:#2a2622;color:#f4efe6;display:grid;place-items:center;font:600 34px Georgia,serif}
 h1{font:500 28px Georgia,serif;margin:0 0 10px}p{margin:0;color:#6f675d;font-size:17px;line-height:1.4}</style></head>
-<body><main><div class="m">V</div><h1>You are signed in</h1><p>Vincent is collecting your Echo speakers.<br>You can go back to the Vincent app.</p></main></body></html>`;
+<body><main><div class="m">V</div><h1>You are signed in</h1><p>Vincent is collecting your Echo speakers.<br>You can go back to the Vincent app.</p></main>
+<script>setTimeout(function(){location.href="vincentdone://signed-in"},400)</script></body></html>`;
 
 /**
  * Amazon's sign-in for Echo speakers. Home Assistant shows Amazon's page from its own address; the hub passes it through

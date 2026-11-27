@@ -333,6 +333,8 @@ export interface StepField {
 export interface Step {
   /** link = the maker's own website has to be visited (`url`); the hub notices when that is finished. */
   kind: "form" | "wait" | "done" | "stopped" | "link";
+  /** Help kept out of the way until it is needed: what to do when the maker's sign-in will not go through. */
+  trouble?: string;
   /** With `wait`: what is going on, in a word ("Installing…"). */
   doing?: string;
   /** A picture that shows where to look in the maker's own app, by its path among the app's own files ("help/tuya-scan.jpg"). */

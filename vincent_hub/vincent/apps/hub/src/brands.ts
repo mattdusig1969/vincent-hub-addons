@@ -58,7 +58,7 @@ export const BRANDS: Entry[] = [
   M(B("leviton", "Leviton Decora Smart", "lights", "matter", undefined, "Leviton's second-generation Decora Smart Wi-Fi switches, dimmers, plugs, outlets and fan controllers can be added with a code, and the newer D3 models come ready for it. Note: Leviton's Matter update removes the device from Apple Home; it has to be added there again with the Matter code.", "matter"),
     "For Decora Smart Wi-Fi 2nd Gen (models starting D2) and the newer D3 models. First-generation models cannot be added.",
     ["Older D2 models: in the My Leviton app, join the Matter Early Access Program and run System Updates (once). D3 models skip this.", "Tap the switch or dimmer, then Device Settings.", "Tap Matter Pairing Code and enter the number under the square code here."]),
-  B("amazon_echo", "Amazon Echo (Alexa)", "media", "steps", "alexa_media", "Sign in with the Amazon account your Echo speakers are on. Amazon's own sign-in page opens for it: you type your email and password there. If Amazon refuses the code it texts you, use an authenticator app instead: at amazon.com open Account, then Login & security, then 2-step verification, and choose Add new app. Scan the square code it shows with an authenticator app (Google Authenticator, Microsoft Authenticator or the one built into iPhone Passwords), then sign in here again and type the six digits from that app. The first time, the hub takes about two minutes to get ready."),
+  B("amazon_echo", "Amazon Echo (Alexa)", "media", "steps", "alexa_media", "Sign in with the Amazon account your Echo speakers are on. Amazon's own sign-in page opens for it: you type your email and password there."),
   B("amazon_plug", "Amazon Smart Plug", "other", "matter", undefined, "Check the plug for the Matter badge. The Amazon Basics Smart Plug has it and can be added with the code in its box. The older Amazon Smart Plug has no badge and works only through Alexa.", "matter"),
   B("wyze", "Wyze", "other", "none", undefined, "Wyze devices work only through the Wyze app and account. Limited by manufacturer."),
   B("smartthings", "SmartThings", "other", "link", "smartthings", "SmartThings needs an account link with Samsung, and from December 15, 2026 a paid Samsung plan. The easier way: devices in SmartThings that speak Matter can be shared to Vincent with a code, with no Samsung plan."),
@@ -240,3 +240,6 @@ export const brandList = (): Brand[] => BRANDS.map(({ driver: _driver, ...b }) =
   return { ...b, needs: needs ?? BY_HOW[b.how][0], fit: f, about, ...(models ? { models } : {}) };
 });
 export const brand = (id: string): Entry | undefined => BRANDS.find((b) => b.id === id);
+
+/** Kept back until a sign-in will not go through. */
+export const ECHO_TROUBLE = "If Amazon refuses the code it texts you, use an authenticator app instead: at amazon.com open Account, then Login & security, then 2-step verification, and choose Add new app. Scan the square code it shows with an authenticator app (Google Authenticator, Microsoft Authenticator or the one built into iPhone Passwords), then sign in here again and type the six digits from that app.";

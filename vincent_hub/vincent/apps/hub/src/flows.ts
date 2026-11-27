@@ -9,7 +9,7 @@
 import type { HA } from "./ha.ts";
 import type { Devices } from "./devices.ts";
 import { store } from "./store.ts";
-import { brand, BRANDS } from "./brands.ts";
+import { brand, BRANDS, ECHO_TROUBLE } from "./brands.ts";
 import type { Step, StepField } from "../../../packages/core/src/index.ts";
 
 /** Words for the questions makers ask most, when the maker's own wording is missing. */
@@ -308,6 +308,7 @@ export class Flows {
         if (domain === "homekit_controller" && reason === "no_devices") return end(stopped("The hub could not find this device waiting to be paired. First check that it has been set up in its maker's own app (that is what puts it on your Wi-Fi), and that it is plugged in and has had a minute to come back: a device that is new out of the box, or unplugged to read its code, cannot be found. If it is on, it is already paired somewhere else, most likely Apple Home (or another home hub), and a device with an Apple Home code can only be paired in one place at a time: open the Home app on an iPhone, remove the device there (it stays in its maker's own app), then scan its code here again."));
         const sentence = /[.!?]$/.test(why) ? why : `${why}.`;
         // Nothing found, or nothing answered: say what to check, not just that it failed.
+        if (domain === "alexa_media") return end({ ...stopped(sentence), trouble: ECHO_TROUBLE });
         return end(stopped(tips && /no_dev|cannot_connect|timeout/.test(reason) ? `${sentence} ${tips}` : why));
       }
       case "external": case "external_done":
@@ -316,7 +317,7 @@ export class Flows {
           this.finished.delete(id);
           const before = this.open.get(id);
           this.open.set(id, { domain, rooms, fields: [], menu: false, tips, name, link: true, hassUrl: before?.hassUrl });
-          const step: Step = { kind: "link", flow: id, url: String(r.url), title: name ?? "Amazon", text: "Amazon's sign-in opens next, shown through your hub. Sign in the way you always do. If Amazon texts you a code, type it there. Vincent carries on by itself when you are done.", fields: [] };
+          const step: Step = { kind: "link", flow: id, url: String(r.url), title: name ?? "Amazon", text: "Amazon's sign-in opens next, shown through your hub. Sign in the way you always do. If Amazon texts you a code, type it there. Vincent carries on by itself when you are done.", trouble: ECHO_TROUBLE, fields: [] };
           this.last.set(id, step);
           return step;
         }
