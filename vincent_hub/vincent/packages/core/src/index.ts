@@ -271,6 +271,8 @@ export interface HubStatus {
   /** True once an owner and an admin PIN exist. */
   setUp: boolean;
   owner: string;
+  /** Vincent's own version on the hub. */
+  vincent?: string;
 }
 
 /** What the app hands the hub service at the end of first-time setup. */

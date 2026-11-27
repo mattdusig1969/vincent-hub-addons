@@ -93,7 +93,12 @@ if (existsSync(file)) {
   catch (e) { console.log(`[store] ${file} unreadable, starting empty: ${(e as Error).message}`); }
 }
 
+let frozen = false;
+/** Stops anything more being saved: another home's records have just been laid in, and the service is about to start again with them. */
+export function freeze(): void { frozen = true; }
+
 function save(): void {
+  if (frozen) return;
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file + ".tmp", JSON.stringify(saved, null, 1));
   renameSync(file + ".tmp", file);

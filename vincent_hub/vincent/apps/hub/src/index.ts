@@ -76,6 +76,7 @@ import { changes } from "./changes.ts";
 import { Scenes, cleanSteps, cleanWhen, isRoomKind, sceneIcon } from "./scenes.ts";
 import { store } from "./store.ts";
 import { NowPlaying } from "./nowplaying.ts";
+import { Backup } from "./backup.ts";
 import type { Device, Repeat, Scene } from "../../../packages/core/src/index.ts";
 import { dayKey, whenDue, whenWords, everythingOff, cleanSays, RULES, ruleFor, controlWords, CLIMATE_MODES, type SunTimes } from "../../../packages/core/src/index.ts";
 import { THEMES, CUSTOM_THEME, cleanPalette, STYLES, HOME_STYLE, FONTS, CHARACTERS, VOICE_LANGUAGES, defaultVoice, outfitOf, type HubStatus, type SetupRequest, type Software } from "../../../packages/core/src/index.ts";
@@ -152,6 +153,13 @@ async function software(): Promise<Software> {
     return { version: info.version ?? "", latest: info.version_latest ?? info.version ?? "", canUpdate: !!info.update_available };
   } catch { return { version: "", latest: "", canUpdate: false }; }
 }
+
+let myVersion = "";
+software().then((s) => { myVersion = s.version; });
+/** Copies of the home, and bringing a home over from another hub. Only on a real hub. */
+const backup = process.env.SUPERVISOR_TOKEN ? new Backup(supervisor, () => myVersion) : null;
+// A move that was cut short after the hub's own records arrived is finished at the next start.
+if (backup?.unfinished) setTimeout(() => backup.finish().catch((e) => console.log(`[backup] could not finish the move: ${(e as Error).message}`)), 5000);
 
 // Push: one debounced "changed" to every open app.
 const streams = new Set<ServerResponse>();
@@ -286,7 +294,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
   const m = req.method ?? "GET";
 
   if (m === "GET" && path === "/api/status") {
-    const s: HubStatus = { connected: ha.connected, version: ha.version, homeName: store.homeName || ha.homeName, reviewed: store.reviewed, setUp: store.setUp, owner: store.owner };
+    const s: HubStatus = { connected: ha.connected, version: ha.version, homeName: store.homeName || ha.homeName, reviewed: store.reviewed, setUp: store.setUp, owner: store.owner, vincent: myVersion };
     return json(res, 200, s);
   }
   if (m === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
@@ -317,6 +325,16 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     // A device let in with the join PIN starts with the rules the owner set for newcomers; one let in with the admin PIN is the owner's own.
     return json(res, 200, { ok: true, key: store.pair(name, person, byJoinPin ? store.joinDeny : []) });
   }
+
+  // Another hub asking for this home, to carry it over: it must show this home's PIN, and gets a fresh copy to fetch.
+  if (m === "POST" && path === "/api/backup/hand") {
+    if (!backup) return json(res, 404, { error: "not on a hub" });
+    const r = pinOk((await body(req)).pin);
+    if (r !== "ok") return pinRefusal(res, r);
+    try { const h = await backup.hand(); changes.add("Another hub", "Took a copy of this home, to move it"); return json(res, 200, h); }
+    catch (e) { return json(res, 500, { error: `The other hub could not make a copy of its home: ${(e as Error).message}` }); }
+  }
+  if (m === "GET" && path === "/api/backup/file") { if (!backup) return json(res, 404, { error: "not on a hub" }); return backup.send(new URL(req.url ?? "/", "http://hub").searchParams.get("pass") ?? "", res); }
 
   // Everything below is for paired devices only. (An event stream cannot send a header, so the key may ride in the address.)
   const key = (req.headers.authorization ?? "").replace(/^Bearer /, "") || new URL(req.url ?? "/", "http://hub").searchParams.get("k") || "";
@@ -412,6 +430,24 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const text = await report({ ha, devices, media, lists, supervisor, picture: () => portraits.status(), matter, matterCare: keeper ? { ...keeper.health(), history: keeper.history() } : null, note: String(b.note ?? ""), app: b.app ?? null });
     console.log("[hub] a report was made");
     return json(res, 200, { text });
+  }
+  // Copies of the home. Asked for while the hub's own software restarts in the middle of a move, so it does not wait for it.
+  if (path.startsWith("/api/backup")) {
+    if (!backup) return json(res, 200, { ok: false, copies: [], hubs: [], move: { step: "" }, message: "This only works on a real hub." });
+    if (m === "GET" && path === "/api/backup/move") return json(res, 200, { move: backup.state });
+    try {
+      if (m === "GET" && path === "/api/backup") return json(res, 200, { copies: await backup.list(), move: backup.state });
+      if (!isUnlocked(key)) return json(res, 403, { code: "pin", error: "Enter the PIN first." });
+      if (m === "GET" && path === "/api/backup/hubs") return json(res, 200, { hubs: await backup.others() });
+      if (m === "POST" && path === "/api/backup/make") { const c = await backup.make(); say("Made a copy of this home"); return json(res, 200, { ok: true, copy: c }); }
+      if (m === "POST" && path === "/api/backup/bring") {
+        const b = await body(req);
+        await backup.bring(String(b.url ?? ""), String(b.pin ?? ""));
+        say("Started bringing a home over from another hub");
+        return json(res, 200, { ok: true });
+      }
+    } catch (e) { return json(res, 409, { error: (e as Error).message }); }
+    return json(res, 404, { error: "not found" });
   }
   if (!ha.connected) return json(res, 503, { error: "The hub is starting. Try again in a moment." });
 

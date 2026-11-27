@@ -1,5 +1,5 @@
 name: Vincent Hub
-version: "0.7.30"
+version: "0.7.31"
 slug: vincent_hub
 description: The Vincent hub service. Holds the home's device list and serves the Vincent app.
 arch:
