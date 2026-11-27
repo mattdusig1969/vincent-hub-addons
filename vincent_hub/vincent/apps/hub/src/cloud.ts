@@ -24,7 +24,13 @@ function ownKey(): string {
 }
 
 let me: { hub: string; secret: string } | undefined;
-async function who(): Promise<{ hub: string; secret: string }> {
+let asking: Promise<{ hub: string; secret: string }> | undefined;
+/** One name for the home, however many things ask at once. */
+function who(): Promise<{ hub: string; secret: string }> {
+  asking ??= whoNow().finally(() => { asking = undefined; });
+  return asking;
+}
+async function whoNow(): Promise<{ hub: string; secret: string }> {
   if (me) return me;
   if (existsSync(FILE)) { try { const j = JSON.parse(readFileSync(FILE, "utf8")); if (j.hub && j.secret) return (me = j); } catch { /* ask again */ } }
   const r = await fetch(`${CLOUD}/api/register`, { method: "POST", signal: AbortSignal.timeout(12_000) });
