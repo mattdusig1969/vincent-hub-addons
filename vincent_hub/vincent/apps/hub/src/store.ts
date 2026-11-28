@@ -186,6 +186,14 @@ export const store = {
     if (all.some(([, d]) => d.owner)) return !!saved.paired?.[h]?.owner;
     return all.sort((a, b) => a[1].since.localeCompare(b[1].since))[0]?.[0] === h;
   },
+  /** This device speaks for the home from now on: its look is the home's look. In a home from before owners were written down, the first to join keeps its place too. */
+  makeOwner(key: string): void {
+    const all = Object.entries(saved.paired ?? {}), d = saved.paired?.[sha(key)];
+    if (!d) return;
+    if (!all.some(([, x]) => x.owner)) { const first = all.sort((a, b) => a[1].since.localeCompare(b[1].since))[0]; if (first) first[1].owner = true; }
+    d.owner = true;
+    save();
+  },
   /** This device's own look: only what it chose differently from the home. */
   /** Starred music belongs to a person: every phone and tablet with the same person's name shares one list. A device with no person keeps its own. */
   starsOwner(key: string): string { const d = saved.paired?.[sha(key)]; return d?.person ? `p:${d.person.trim().toLowerCase()}` : `d:${sha(key).slice(0, 16)}`; },

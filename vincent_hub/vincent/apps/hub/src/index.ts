@@ -434,6 +434,20 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     const r = pinOk((await body(req)).pin);
     if (r !== "ok") return pinRefusal(res, r);
     unlocked.set(key, Date.now() + UNLOCK_MS);
+    // Whoever holds the admin PIN speaks for the home: this device's look is the home's from now on, so a phone that
+    // joins later wears what the admin chose. (An owner who reconnected their phone would otherwise be an ordinary device.)
+    if (!store.isOwner(key)) {
+      const own = store.lookOf(key);
+      if (own.theme) store.setTheme(own.theme);
+      if (own.palette) store.setPalette(own.palette);
+      if (own.style) store.setStyle(own.style);
+      if (own.custom) store.setCustom(own.custom);
+      if (own.character) store.setCharacter(own.character);
+      if (own.rotate) store.setRotate(own.rotate);
+      for (const [who, v] of Object.entries(own.voices ?? {})) store.setVoice(who, v);
+      store.setLook(key, null);
+      store.makeOwner(key);
+    }
     return json(res, 200, { ok: true });
   }
   // A new PIN needs the current one, even on a device whose settings are open.
