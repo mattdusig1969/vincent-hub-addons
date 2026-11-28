@@ -29,6 +29,8 @@ export interface TalkDeps {
   /** A reminder for the whole home, at a moment in time. */
   remind: (text: string, at: Date, repeat: string) => void;
   listAdd: (listId: string, text: string) => Promise<void>;
+  /** Switches a TV or TV box to one of the apps or inputs it lists. */
+  input: (controlId: string, source: string) => Promise<void>;
   /** Writes a line in the home's activity log against the device that asked. */
   say: (what: string, kind: string) => void;
 }
@@ -61,7 +63,7 @@ How to answer:
 - You may chat about almost anything a friendly household helper would: cooking, homework, trivia, films, music, planning a day, how things work.
 
 What you may do:
-- With the tools, you may switch lights and plugs, dim lights, pause, resume, skip and set the volume of music, set thermostats, run the home's scenes, and lock doors or close garage doors and shades.
+- With the tools, you may switch lights and plugs, switch a TV or TV box on and off and open one of its apps or inputs with watch, dim lights, pause, resume, skip and set the volume of music, set thermostats, run the home's scenes, and lock doors or close garage doors and shades.
 - You can NEVER unlock a door or open a garage door or shade. If asked, say kindly that for safety that has to be done by hand in the app, under Security.
 - You may start music by name with play_music: an artist, a song, a style ("some jazz"), a station or a playlist. It needs a room. If the person names a room, use it. If they do not, use their device's own room when WHO YOU ARE TALKING TO gives one. If neither, ask which room before playing anything, and name two or three rooms that have a speaker.
 - Timers: set_timer starts one ("set a timer for ten minutes", "a pasta timer for 8 minutes"); it counts down on the screen and rings on the person's device. stop_timer stops or cancels one, ringing or not. Running timers are in THE HOUSE NOW; to say how long is left, look there.
@@ -85,7 +87,7 @@ function stateOf(c: Control): string {
   switch (c.kind) {
     case "light": return c.on ? `on${c.dimmable ? ` at ${Math.round(c.brightness)}%` : ""}` : "off";
     case "switch": return c.on ? "on" : "off";
-    case "media": return c.state === "playing" ? `playing ${[c.title, c.artist].filter(Boolean).join(" by ") || "something"}${c.volume !== undefined ? `, volume ${c.volume}%` : ""}` : c.state;
+    case "media": return `${c.state === "playing" ? `playing ${[c.title, c.artist].filter(Boolean).join(" by ") || "something"}${c.volume !== undefined ? `, volume ${c.volume}%` : ""}` : c.state}${c.app && c.state !== "off" ? `, showing ${c.app}` : ""}${c.library === "none" && c.inputs.length ? `; apps and inputs it can open: ${c.inputs.slice(0, 40).join(", ")}` : ""}`;
     case "climate": return `${c.current ?? "?"}° now, set to ${c.target ?? "?"}°${c.mode ? `, mode ${c.mode}` : ""}`;
     case "lock": return c.locked ? "locked" : "UNLOCKED";
     case "cover": return c.open ? "OPEN" : "closed";
@@ -135,10 +137,15 @@ const TOOLS = [{ functionDeclarations: [
   { name: "control", description: "Change one device. Use the handle from THE HOUSE NOW. Cannot unlock or open anything.",
     parameters: { type: "OBJECT", properties: {
       handle: { type: "STRING", description: "The device's handle, like c3." },
-      action: { type: "STRING", enum: ["on", "off", "brightness", "pause", "play", "next", "volume", "target", "mode", "lock", "close"], description: "on/off for lights and plugs; brightness (value 1-100) for lights; pause, play (resume), next, volume (value 0-100) for music and TV; target (value = degrees) and mode for thermostats; lock for locks; close for garage doors and shades." },
+      action: { type: "STRING", enum: ["on", "off", "brightness", "pause", "play", "next", "volume", "target", "mode", "lock", "close"], description: "on/off for lights, plugs, TVs and TV boxes; brightness (value 1-100) for lights; pause, play (resume), next, volume (value 0-100) for music and TV; target (value = degrees) and mode for thermostats; lock for locks; close for garage doors and shades." },
       value: { type: "NUMBER", description: "The brightness, volume or temperature, when the action needs one." },
       mode: { type: "STRING", enum: CLIMATE_MODES.map((m) => m.id), description: "For a thermostat's mode." },
     }, required: ["handle", "action"] } },
+  { name: "watch", description: "Open an app or input on a TV or TV box (YouTube TV, Netflix, HDMI 1). Switches it on first if it is off. Only the apps and inputs THE HOUSE NOW lists for it.",
+    parameters: { type: "OBJECT", properties: {
+      handle: { type: "STRING", description: "The TV or TV box's handle." },
+      app: { type: "STRING", description: "The app or input, as the person said it." },
+    }, required: ["handle", "app"] } },
   { name: "play_music", description: "Find music by name and start it on the speaker in a room. Always give the room.",
     parameters: { type: "OBJECT", properties: {
       query: { type: "STRING", description: "What to play: an artist, song, album, style, station or playlist, in a few words." },
@@ -165,7 +172,7 @@ const TOOLS = [{ functionDeclarations: [
   { name: "add_to_list", description: "Add one thing to one of the home's lists.",
     parameters: { type: "OBJECT", properties: { list: { type: "STRING", description: "The list's name, as in THE HOUSE NOW." }, item: { type: "STRING" } }, required: ["list", "item"] } },
 ] }];
-const ALLOWED: Record<string, string[]> = { light: ["on", "off", "brightness"], switch: ["on", "off"], media: ["pause", "play", "next", "volume"], climate: ["target", "mode"], lock: ["lock"], cover: ["close"] };
+const ALLOWED: Record<string, string[]> = { light: ["on", "off", "brightness"], switch: ["on", "off"], media: ["on", "off", "pause", "play", "next", "volume"], climate: ["target", "mode"], lock: ["lock"], cover: ["close"] };
 const SAFETY = ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"].map((category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" }));
 
 /** For a second try after a harmless answer was stopped: unkindness is judged a little less strictly (a host telling its own sad story trips the strictest setting); everything else stays as strict. */
@@ -352,6 +359,28 @@ export class Talk {
       this.deps.say(`Played ${found.title} on ${labelOf(here[0].d, here[0].c)}, by asking the host`, "media");
       const radio = found.from === "internet radio";
       return { ok: true, did: `Playing ${found.title} in ${room.name}, from ${found.from}`, ...({ from: found.from, ...(radio ? { note: "This is a radio station, so songs cannot be skipped or chosen. Say so in a few words. Connecting Spotify under Media gives albums and artists on demand." } : {}) } as object) };
+    }
+    if (name === "watch") {
+      if (barred("media")) return { ok: false, error: "The home's owner has not allowed this device to control music and TV." };
+      const at = handles.get(String(args.handle ?? ""));
+      if (!at || at.c.kind !== "media") return { ok: false, error: "No such TV." };
+      const { c, d } = at, label = labelOf(d, c), flat = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, ""), wanted = flat(String(args.app ?? ""));
+      if (!c.inputs.length) return { ok: false, error: `${label} does not say which apps it has, so one cannot be opened from here.` };
+      const app = c.inputs.find((x) => flat(x) === wanted) ?? c.inputs.filter((x) => wanted && (flat(x).includes(wanted) || wanted.includes(flat(x)))).sort((a, b) => Math.abs(flat(a).length - wanted.length) - Math.abs(flat(b).length - wanted.length))[0];
+      if (!app) return { ok: false, error: `${label} has nothing called that. It has: ${c.inputs.slice(0, 40).join(", ")}.` };
+      if (c.state === "off") {
+        await this.deps.control({ id: c.id, action: "on" });
+        // A box waking from sleep does not take an app until it is up.
+        for (let i = 0; i < 16; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          const now = (await this.deps.house()).devices.flatMap((x) => x.controls).find((x) => x.id === c.id);
+          if (now?.kind === "media" && now.state !== "off") break;
+        }
+      }
+      try { await this.deps.input(c.id, app); }
+      catch { await new Promise((r) => setTimeout(r, 2500)); await this.deps.input(c.id, app); }
+      this.deps.say(`Opened ${app} on ${label}, by asking the host`, "media");
+      return { ok: true, did: `Opened ${app} on ${label}` };
     }
     if (name !== "control") return { ok: false, error: "No such tool." };
     const at = handles.get(String(args.handle ?? ""));

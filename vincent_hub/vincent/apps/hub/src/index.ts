@@ -566,6 +566,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
       stopTimer: (id) => { store.removeTimer(id); },
       remind: (text, at, repeat) => { store.addReminder({ text, at: at.toISOString(), repeat: repeatOf(repeat), for: "", by: me.person || me.name, made: me.id }); say(`Set the reminder "${text.slice(0, 60)}" by asking the host`); },
       listAdd: (id, text) => lists.change(id, { op: "add", text }),
+      input: (id, source) => { nowPlaying.note(me.id, id); return media.play(id, { kind: "input", id: source, title: source }); },
       say,
     };
     const asker = { ...me, room: store.rooms().find((r) => r.id === String(b.room ?? ""))?.name };
